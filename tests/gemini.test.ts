@@ -23,3 +23,4 @@ describe('Gemini Integration Architecture', () => {
     expect(prompt).toContain('2/4')
   })
 })
+
