@@ -14,3 +14,4 @@ SET
   next_day_plan_time = COALESCE(next_day_plan_time, '21:30'::time),
   start_date_resets_remaining = COALESCE(start_date_resets_remaining, 3)
 WHERE accountability_tone IS NULL OR why_i_must_switch IS NULL OR next_day_plan_time IS NULL;
+

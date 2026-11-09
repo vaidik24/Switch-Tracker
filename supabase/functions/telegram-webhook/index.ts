@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4"
+import { generateAITomorrowPlan } from "../_shared/gemini.ts"
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || ""
 const TELEGRAM_WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") || ""
@@ -309,13 +310,37 @@ serve(async (req: Request) => {
         matchingWeek = DEFAULT_PLAN_WEEKS.find((w) => tomorrowStr >= w.startDate && tomorrowStr <= w.endDate)
       }
 
-      const planReply = matchingWeek
+      let planReply = matchingWeek
         ? `🎯 <b>TOMORROW'S BATTLE PLAN (${tomorrowWeekday}, ${tomorrowStr})</b>\n\n` +
           `• <b>Week ${matchingWeek.weekNumber}:</b> ${matchingWeek.focusTopic}\n` +
           `• <b>DSA Target:</b> ${matchingWeek.dsaGoal}\n` +
           `• <b>System Design / CS:</b> ${matchingWeek.studyGoal}\n\n` +
           `<i>"Tomorrow you don't negotiate with your laziness. You wake up and execute."</i>`
         : `🎯 <b>TOMORROW'S PLAN (${tomorrowWeekday}, ${tomorrowStr})</b>\n\nPlan begins on 11th Nov. Review terminology and set up your environment!`
+
+      if (matchingWeek) {
+        try {
+          const aiPlan = await generateAITomorrowPlan({
+            todayDate: todayStr,
+            tomorrowDate: tomorrowStr,
+            tomorrowWeekday,
+            weekNumber: matchingWeek.weekNumber,
+            focusTopic: matchingWeek.focusTopic,
+            dsaGoal: matchingWeek.dsaGoal,
+            studyGoal: matchingWeek.studyGoal,
+            mustDoTotal: dailyStatus?.must_do_total || 4,
+            mustDoDone: dailyStatus?.must_do_done || 0,
+            remainingTitles: dailyStatus?.remaining_titles || [],
+            streak: 0,
+            whyIMustSwitch: why,
+          })
+          if (aiPlan) {
+            planReply = aiPlan
+          }
+        } catch (e) {
+          console.warn("AI plan generation error, using standard template:", e)
+        }
+      }
 
       await sendTelegramMessage(chatId, planReply, {
         inline_keyboard: [[{ text: "📱 Open App", url: APP_URL }]],

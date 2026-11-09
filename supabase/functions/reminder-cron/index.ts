@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4"
 import { shouldSend, ReminderSettings, DailyStatus, ReminderLogEntry, MessageToSend, TomorrowPlanSummary } from "../_shared/shouldSend.ts"
+import { generateAITomorrowPlan, generateAINagMessage } from "../_shared/gemini.ts"
 
 const CRON_SECRET = Deno.env.get("CRON_SECRET") || ""
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || ""
@@ -332,13 +333,58 @@ serve(async (req: Request) => {
       const userChannels = (channels || []).filter((c) => c.user_id === userId)
 
       for (const msg of messages) {
+        let dispatchMsg = { ...msg }
+
+        // Use Gemini API dynamically for Nightly Tomorrow Plan
+        if (msg.kind === 'next_day_plan' && tomorrowPlanSummary) {
+          try {
+            const aiPlan = await generateAITomorrowPlan({
+              todayDate: now.dateStr,
+              tomorrowDate: tomorrowPlanSummary.dateStr,
+              tomorrowWeekday: tomorrowPlanSummary.weekdayName,
+              weekNumber: tomorrowPlanSummary.weekNumber,
+              focusTopic: tomorrowPlanSummary.focusTopic,
+              dsaGoal: tomorrowPlanSummary.dsaGoal,
+              studyGoal: tomorrowPlanSummary.studyGoal,
+              mustDoTotal: status?.must_do_total || 4,
+              mustDoDone: status?.must_do_done || 0,
+              remainingTitles: status?.remaining_titles || [],
+              streak: 0,
+              whyIMustSwitch: settings.why_i_must_switch || '',
+            })
+            if (aiPlan) {
+              dispatchMsg.text = aiPlan
+            }
+          } catch (e) {
+            console.warn("AI Tomorrow Plan generation failed, falling back to template:", e)
+          }
+        }
+
+        // Use Gemini API dynamically for Nighttime Nag Reality Checks
+        if (msg.kind === 'nag' && status && status.remaining_titles.length > 0) {
+          try {
+            const aiNag = await generateAINagMessage({
+              todayDate: now.dateStr,
+              remainingTasks: status.remaining_titles,
+              streak: 0,
+              whyIMustSwitch: settings.why_i_must_switch || '',
+              currentHour: now.hour,
+            })
+            if (aiNag) {
+              dispatchMsg.text = aiNag
+            }
+          } catch (e) {
+            console.warn("AI Nag reality check generation failed, falling back to template:", e)
+          }
+        }
+
         for (const ch of userChannels) {
           if (!ch.enabled) continue
 
           let dispatchResult: { ok: boolean; status: number; error?: string } = { ok: false, status: 0 }
 
           if (ch.type === "telegram" && ch.telegram_chat_id && ch.verified) {
-            dispatchResult = await sendTelegram(ch.telegram_chat_id, msg)
+            dispatchResult = await sendTelegram(ch.telegram_chat_id, dispatchMsg)
 
             if (!dispatchResult.ok) {
               if (dispatchResult.status === 403) {
