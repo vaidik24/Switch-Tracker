@@ -85,6 +85,22 @@ const DEFAULT_PLAN_WEEKS = [
   },
 ]
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-telegram-bot-api-secret-token",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+}
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+    },
+  })
+}
+
 async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: unknown) {
   if (!TELEGRAM_BOT_TOKEN) return
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`
@@ -118,18 +134,58 @@ async function answerCallbackQuery(callbackQueryId: string, text: string) {
 }
 
 serve(async (req: Request) => {
-  // 1. Verify webhook secret header
+  // Handle CORS preflight
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders })
+  }
+
+  // 1. Verify webhook secret header or authenticated frontend session
   const secretHeader = req.headers.get("X-Telegram-Bot-Api-Secret-Token")
-  if (TELEGRAM_WEBHOOK_SECRET && secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
-    return new Response("Unauthorized", { status: 401 })
+  const authHeader = req.headers.get("Authorization")
+  const isFromTelegram = TELEGRAM_WEBHOOK_SECRET ? secretHeader === TELEGRAM_WEBHOOK_SECRET : true
+  const isFromFrontend = Boolean(authHeader)
+
+  if (!isFromTelegram && !isFromFrontend) {
+    return new Response("Unauthorized", { status: 401, headers: corsHeaders })
   }
 
   if (req.method !== "POST") {
-    return new Response("OK", { status: 200 })
+    return new Response("OK", { status: 200, headers: corsHeaders })
   }
 
   try {
     const update = await req.json()
+
+    // Handle test reminder request from frontend
+    if (update.test) {
+      let userId: string | null = null
+      if (authHeader) {
+        const token = authHeader.replace("Bearer ", "")
+        const { data: { user } } = await supabase.auth.getUser(token)
+        userId = user?.id || null
+      }
+      if (userId) {
+        const { data: ch } = await supabase
+          .from("notification_channels")
+          .select("telegram_chat_id")
+          .eq("user_id", userId)
+          .eq("type", "telegram")
+          .single()
+
+        if (ch?.telegram_chat_id) {
+          await sendTelegramMessage(
+            ch.telegram_chat_id,
+            "🧪 <b>Test Reminder from Job Switch Tracker!</b>\n\n" +
+            "Your Telegram bot connection is verified and active! Daily battle plans and reality check reminders will arrive here.",
+            {
+              inline_keyboard: [[{ text: "📱 Open App", url: APP_URL }]],
+            }
+          )
+          return jsonResponse({ ok: true, message: "Test reminder sent" })
+        }
+      }
+      return jsonResponse({ error: "Telegram channel not found or not connected yet" }, 400)
+    }
 
     // 2. Handle callback queries (e.g. Snooze 1h button on reminders)
     if (update.callback_query) {
@@ -158,19 +214,19 @@ serve(async (req: Request) => {
 
             await answerCallbackQuery(cq.id, "Snoozed for 1 hour!")
             await sendTelegramMessage(chatId, "💤 Reminders snoozed for 1 hour. Get back to work soon!")
-            return new Response(JSON.stringify({ ok: true }), { status: 200 })
+            return jsonResponse({ ok: true })
           }
         }
       }
 
       await answerCallbackQuery(cq.id, "Acknowledged")
-      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      return jsonResponse({ ok: true })
     }
 
     // 3. Handle incoming messages & commands
     const msg = update.message
     if (!msg || !msg.text) {
-      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      return jsonResponse({ ok: true })
     }
 
     const chatId = msg.chat.id
@@ -221,13 +277,13 @@ serve(async (req: Request) => {
               ],
             }
           )
-          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+          return jsonResponse({ ok: true })
         } else {
           await sendTelegramMessage(
             chatId,
             "❌ This connection link is invalid or has expired. Please generate a new code in the Tracker Settings."
           )
-          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+          return jsonResponse({ ok: true })
         }
       }
     }
@@ -241,7 +297,7 @@ serve(async (req: Request) => {
       .single()
 
     if (!channel || !channel.verified) {
-      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      return jsonResponse({ ok: true })
     }
 
     const userId = channel.user_id
@@ -394,9 +450,9 @@ serve(async (req: Request) => {
       await sendTelegramMessage(chatId, "Type /today to view remaining tasks, /tomorrow for tomorrow's plan, or /help for all commands.")
     }
 
-    return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    return jsonResponse({ ok: true })
   } catch (err: any) {
     console.error("Webhook processing error:", err)
-    return new Response(JSON.stringify({ error: err.message }), { status: 200 })
+    return jsonResponse({ error: err.message }, 500)
   }
 })
