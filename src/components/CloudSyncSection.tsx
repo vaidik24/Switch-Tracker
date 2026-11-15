@@ -5,18 +5,45 @@ import { isSupabaseConfigured, getSupabase } from '../lib/supabaseClient'
 export default function CloudSyncSection() {
   const { user, status, lastSyncedAt, error, isSyncing, triggerSync, downloadBackup, signOut } = useSync()
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [authMode, setAuthMode] = useState<'password' | 'magiclink'>('password')
   const [magicLinkSent, setMagicLinkSent] = useState(false)
   const [authError, setAuthError] = useState('')
   const [syncMessage, setSyncMessage] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const configured = isSupabaseConfigured()
+
+  async function handlePasswordAuth(e: React.FormEvent) {
+    e.preventDefault()
+    setAuthError('')
+    setIsSubmitting(true)
+    const supabase = getSupabase()
+    if (!supabase) {
+      setAuthError('Supabase is not configured yet. Check your environment variables.')
+      setIsSubmitting(false)
+      return
+    }
+
+    const { error: err } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+
+    if (err) {
+      setAuthError(err.message)
+    }
+    setIsSubmitting(false)
+  }
 
   async function handleSendMagicLink(e: React.FormEvent) {
     e.preventDefault()
     setAuthError('')
+    setIsSubmitting(true)
     const supabase = getSupabase()
     if (!supabase) {
       setAuthError('Supabase is not configured yet. Check your environment variables.')
+      setIsSubmitting(false)
       return
     }
 
@@ -32,6 +59,7 @@ export default function CloudSyncSection() {
     } else {
       setMagicLinkSent(true)
     }
+    setIsSubmitting(false)
   }
 
   async function handleManualSync() {
@@ -73,9 +101,62 @@ export default function CloudSyncSection() {
       ) : !user ? (
         <div>
           <p className="text-xs text-gray-400 mb-3">
-            Sign in with your email to sync data across your devices and enable server-side phone reminders.
+            Sign in to sync data across your devices and enable server-side phone reminders.
           </p>
-          {magicLinkSent ? (
+
+          <div className="flex bg-surface-200/60 p-0.5 rounded-lg mb-3">
+            <button
+              type="button"
+              onClick={() => { setAuthMode('password'); setAuthError('') }}
+              className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-colors ${
+                authMode === 'password'
+                  ? 'bg-brand-500 text-white shadow-sm'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              🔑 Password
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAuthMode('magiclink'); setAuthError('') }}
+              className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-colors ${
+                authMode === 'magiclink'
+                  ? 'bg-brand-500 text-white shadow-sm'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              ✉️ Magic Link
+            </button>
+          </div>
+
+          {authMode === 'password' ? (
+            <form onSubmit={handlePasswordAuth} className="space-y-2">
+              <input
+                type="email"
+                placeholder="your.email@example.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                className="input text-sm"
+              />
+              <input
+                type="password"
+                placeholder="Your password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                className="input text-sm"
+              />
+              {authError && <p className="text-xs text-red-400">{authError}</p>}
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="btn-primary w-full text-xs py-2.5"
+              >
+                {isSubmitting ? 'Signing in...' : 'Sign In with Password'}
+              </button>
+            </form>
+          ) : magicLinkSent ? (
             <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
               <p className="text-xs text-emerald-300 font-medium">📬 Magic link sent to {email}!</p>
               <p className="text-xs text-emerald-400/70 mt-1">
@@ -93,8 +174,12 @@ export default function CloudSyncSection() {
                 className="input text-sm"
               />
               {authError && <p className="text-xs text-red-400">{authError}</p>}
-              <button type="submit" className="btn-primary w-full text-xs py-2.5">
-                ✉️ Send Magic Link
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="btn-primary w-full text-xs py-2.5"
+              >
+                {isSubmitting ? 'Sending...' : '✉️ Send Magic Link'}
               </button>
               <p className="text-[11px] text-gray-500 text-center mt-1">
                 Single-user: After your first sign-in, disable new signups in your Supabase dashboard.
