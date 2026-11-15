@@ -13,6 +13,9 @@ export type StoryType = 'star' | 'projectQ' | 'numbers'
 export type MockType = 'DSA' | 'LLD' | 'HLD' | 'Behavioural' | 'AI-assisted debugging'
 export type ChecklistType = 'resume' | 'linkedin' | 'offer'
 
+export type NeetCodeSolveResult = 'alone' | 'hints' | 'failed'
+export type NeetCodeStatus = 'unsolved' | 'solved' | 'needs_revision'
+
 export type AccountabilityTone = 'hardcore' | 'coach' | 'roast'
 
 export interface Settings {
@@ -59,6 +62,34 @@ export interface Problem {
   nextReview: string    // YYYY-MM-DD
   reviewInterval: number // days (current interval in spaced rep)
   reviewCount: number
+}
+
+export interface NeetCodeProblem {
+  id?: string           // e.g. 'nc-contains-duplicate' (primary key, NOT auto-inc)
+  title: string
+  slug: string
+  url: string
+  category: string
+  difficulty: Difficulty
+  estMinutes: number
+  weekNumber: number
+  dayNumber: number
+  status: NeetCodeStatus
+  solveResult: NeetCodeSolveResult | null
+  lastSolvedAt: string | null    // ISO date
+  nextReviewAt: string | null    // YYYY-MM-DD
+  reviewCount: number
+}
+
+export interface CsMicroTask {
+  id?: string           // e.g. 'cs-w1-d1-process-vs-thread' (primary key, NOT auto-inc)
+  weekNumber: number
+  dayNumber: number
+  title: string
+  estMinutes: number
+  deliverable: string
+  completed: boolean
+  completedAt: string | null  // ISO date
 }
 
 export interface Review {
@@ -263,6 +294,8 @@ class TrackerDB extends Dexie {
   offerComparisons!: Table<OfferComparison>
   outbox!: Table<OutboxItem>
   syncMeta!: Table<SyncMeta>
+  neetcodeProblems!: Table<NeetCodeProblem>
+  csMicroTasks!: Table<CsMicroTask>
 
   constructor() {
     super('TrackerDB')
@@ -290,6 +323,11 @@ class TrackerDB extends Dexie {
     this.version(2).stores({
       outbox:          '++id, entity, recordId, action',
       syncMeta:        'key',
+    })
+
+    this.version(3).stores({
+      neetcodeProblems: 'id, weekNumber, dayNumber, category, status, difficulty, nextReviewAt',
+      csMicroTasks: 'id, weekNumber, dayNumber, completed',
     })
   }
 }

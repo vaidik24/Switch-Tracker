@@ -1,9 +1,11 @@
 import db from './db'
 import type {
   Settings, PlanWeek, LLDHLDItem, Concept,
-  Story, Job, Template, ChecklistItem
+  Story, Job, Template, ChecklistItem, NeetCodeProblem, CsMicroTask
 } from './db'
 import { todayIST } from '../lib/dates'
+import { NEETCODE_150 } from '../data/neetcode150'
+import { CS_MICRO_CURRICULUM } from '../data/csMicroCurriculum'
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr + 'T00:00:00+05:30')
@@ -380,6 +382,31 @@ const DEFAULT_SETTINGS: Omit<Settings, 'id'> = {
   onboardingDone: false,
 }
 
+export async function seedNeetCodeAndCSIfEmpty() {
+  const ncCount = await db.neetcodeProblems.count()
+  if (ncCount === 0) {
+    const problems: NeetCodeProblem[] = NEETCODE_150.map(p => ({
+      ...p,
+      status: 'unsolved',
+      solveResult: null,
+      lastSolvedAt: null,
+      nextReviewAt: null,
+      reviewCount: 0,
+    }))
+    await db.neetcodeProblems.bulkAdd(problems)
+  }
+
+  const csCount = await db.csMicroTasks.count()
+  if (csCount === 0) {
+    const tasks: CsMicroTask[] = CS_MICRO_CURRICULUM.map(t => ({
+      ...t,
+      completed: false,
+      completedAt: null,
+    }))
+    await db.csMicroTasks.bulkAdd(tasks)
+  }
+}
+
 export async function seedDatabase() {
   const existingSettings = await db.settings.toArray()
   
@@ -399,6 +426,7 @@ export async function seedDatabase() {
     if (Object.keys(updates).length > 0 && current.id) {
       await db.settings.update(current.id, updates)
     }
+    await seedNeetCodeAndCSIfEmpty()
     return
   }
 
@@ -406,7 +434,8 @@ export async function seedDatabase() {
 
   await db.transaction('rw', [
     db.settings, db.planWeeks, db.lldHldItems, db.concepts,
-    db.stories, db.jobs, db.templates, db.checklistItems
+    db.stories, db.jobs, db.templates, db.checklistItems,
+    db.neetcodeProblems, db.csMicroTasks
   ], async () => {
     await db.settings.add(DEFAULT_SETTINGS)
     await db.planWeeks.bulkAdd(PLAN_WEEKS)
@@ -425,6 +454,23 @@ export async function seedDatabase() {
     await db.jobs.bulkAdd(COMPANIES)
     await db.templates.bulkAdd(TEMPLATES)
     await db.checklistItems.bulkAdd([...RESUME_CHECKLIST, ...LINKEDIN_CHECKLIST])
+    
+    const problems: NeetCodeProblem[] = NEETCODE_150.map(p => ({
+      ...p,
+      status: 'unsolved',
+      solveResult: null,
+      lastSolvedAt: null,
+      nextReviewAt: null,
+      reviewCount: 0,
+    }))
+    await db.neetcodeProblems.bulkAdd(problems)
+
+    const tasks: CsMicroTask[] = CS_MICRO_CURRICULUM.map(t => ({
+      ...t,
+      completed: false,
+      completedAt: null,
+    }))
+    await db.csMicroTasks.bulkAdd(tasks)
   })
 
   console.log('Database seeded!')

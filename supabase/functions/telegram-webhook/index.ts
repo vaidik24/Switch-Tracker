@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4"
 import { generateAITomorrowPlan } from "../_shared/gemini.ts"
+import { NEETCODE_150 } from "../_shared/neetcode150.ts"
+import { CS_MICRO_CURRICULUM } from "../_shared/csMicroCurriculum.ts"
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || ""
 const TELEGRAM_WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") || ""
@@ -101,8 +103,25 @@ function jsonResponse(data: unknown, status = 200) {
   })
 }
 
-async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: unknown) {
+async function sendChatAction(chatId: number, action = "typing") {
   if (!TELEGRAM_BOT_TOKEN) return
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendChatAction`
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, action }),
+    })
+  } catch (err) {
+    console.warn("Failed to send chat action:", err)
+  }
+}
+
+async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: unknown) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error("TELEGRAM_BOT_TOKEN is not set in Edge Function secrets!")
+    return
+  }
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`
   const body: Record<string, unknown> = {
     chat_id: chatId,
@@ -112,11 +131,28 @@ async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: u
   if (replyMarkup) {
     body.reply_markup = replyMarkup
   }
-  await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+
+    if (!res.ok) {
+      const errText = await res.text()
+      console.warn("Telegram sendMessage failed with HTML mode:", errText)
+      // If Telegram rejects due to HTML entity formatting, fallback to plain text
+      delete body.parse_mode
+      body.text = text.replace(/<[^>]*>/g, "")
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    }
+  } catch (err) {
+    console.error("Failed to call Telegram API:", err)
+  }
 }
 
 async function answerCallbackQuery(callbackQueryId: string, text: string) {
@@ -231,10 +267,11 @@ serve(async (req: Request) => {
 
     const chatId = msg.chat.id
     const text = msg.text.trim()
+    const command = text.split("@")[0].split(" ")[0].toLowerCase()
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
 
     // Command: /start <code>
-    if (text.startsWith("/start")) {
+    if (command === "/start") {
       const parts = text.split(" ")
       if (parts.length > 1) {
         const code = parts[1].trim()
@@ -285,6 +322,13 @@ serve(async (req: Request) => {
           )
           return jsonResponse({ ok: true })
         }
+      } else {
+        await sendTelegramMessage(
+          chatId,
+          "👋 <b>Welcome to Job Switch Tracker!</b>\n\n" +
+          "To link this bot to your account, open the tracker web app, go to <b>Settings -> Phone Reminders</b>, and tap <b>Connect Telegram Bot</b>."
+        )
+        return jsonResponse({ ok: true })
       }
     }
 
@@ -297,6 +341,18 @@ serve(async (req: Request) => {
       .single()
 
     if (!channel || !channel.verified) {
+      await sendTelegramMessage(
+        chatId,
+        "⚠️ <b>Account Not Linked</b>\n\n" +
+        "Your Telegram account is not linked to your Job Switch Tracker yet.\n\n" +
+        "<b>To connect:</b>\n" +
+        "1. Open your tracker app\n" +
+        "2. Go to <b>Settings -> Phone Reminders</b>\n" +
+        "3. Tap <b>Connect Telegram Bot</b> and tap the generated link.",
+        {
+          inline_keyboard: [[{ text: "📱 Open App", url: APP_URL }]],
+        }
+      )
       return jsonResponse({ ok: true })
     }
 
@@ -310,43 +366,71 @@ serve(async (req: Request) => {
 
     const why = userSettings?.why_i_must_switch || "To escape career stagnation and land a high-impact Tier-1 role"
 
-    if (text === "/today" || text === "/status") {
-      if (!dailyStatus) {
-        await sendTelegramMessage(
-          chatId,
-          "📋 <b>No tasks synced yet for today.</b>\n\n" +
-          `Remember why you're here: <i>"${why}"</i>.\n` +
-          "Open the app now to view your schedule and start executing!"
-        )
+    function getWeekAndDay(planStartDate: string, targetDateStr: string): { weekNumber: number; dayNumber: number } {
+      const dStart = new Date(planStartDate + "T00:00:00+05:30").getTime()
+      const dTarget = new Date(targetDateStr + "T00:00:00+05:30").getTime()
+      const diffDays = Math.floor((dTarget - dStart) / 86400000)
+      if (diffDays < 0) return { weekNumber: 1, dayNumber: 1 }
+      const weekNumber = Math.min(Math.floor(diffDays / 7) + 1, 8)
+      const dayNumber = (diffDays % 7) + 1
+      return { weekNumber, dayNumber }
+    }
+
+    const planStartDate = userSettings?.plan_start_date || "2026-11-11"
+    const { weekNumber, dayNumber } = getWeekAndDay(planStartDate, todayStr)
+    const todayNeetCode = NEETCODE_150.filter(p => p.weekNumber === weekNumber && p.dayNumber === dayNumber)
+    const todayCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === weekNumber && t.dayNumber === dayNumber)
+
+    if (command === "/today" || command === "/status") {
+      await sendChatAction(chatId, "typing")
+      const remaining = dailyStatus ? dailyStatus.must_do_total - dailyStatus.must_do_done : 4
+      const remainingTasks = dailyStatus?.remaining_titles || []
+
+      let ncListText = todayNeetCode.map(p => `• <a href="${p.url}">${p.title}</a> (<b>${p.difficulty}</b>, ⏱️ ${p.estMinutes}m)`).join("\n")
+      if (!ncListText) ncListText = "• Review weak patterns & revision queue"
+
+      let csTopicText = todayCsTopic
+        ? `• <b>${todayCsTopic.title}</b> (⏱️ ${todayCsTopic.estMinutes}m)\n  <i>${todayCsTopic.deliverable}</i>`
+        : "• Deep dive into week's core concepts"
+
+      let statusLine = ""
+      if (dailyStatus?.done_for_today) {
+        statusLine = "🏆 <b>DONE FOR TODAY! Streak safe.</b>"
+      } else if (remaining === 0 && dailyStatus) {
+        statusLine = "🎉 <b>All tasks done! Tap /done to lock streak.</b>"
       } else {
-        const remaining = dailyStatus.must_do_total - dailyStatus.must_do_done
-        const taskList = dailyStatus.remaining_titles.length > 0
-          ? dailyStatus.remaining_titles.map((t: string) => `• ${t}`).join("\n")
-          : "None (All done! 🏆)"
-
-        const reply = `<b>📅 Today's Status (${todayStr})</b>\n\n` +
-          `• Progress: <b>${dailyStatus.must_do_done}/${dailyStatus.must_do_total}</b> must-do tasks done\n` +
-          `• Status: ${dailyStatus.done_for_today ? "✅ DONE FOR TODAY" : remaining === 0 ? "🎉 All Completed" : `⚠️ ${remaining} TASKS REMAINING`}\n` +
-          `• Rest day: ${dailyStatus.rest_day ? "🛋️ Yes" : "No"}\n` +
-          `• Why you're doing this: <i>"${why}"</i>\n\n` +
-          `<b>Remaining Tasks:</b>\n${taskList}`
-
-        await sendTelegramMessage(chatId, reply, {
-          inline_keyboard: [
-            [
-              { text: "💤 Snooze 1h", callback_data: "snooze_1h" },
-              { text: "📱 Open App", url: APP_URL },
-            ],
-          ],
-        })
+        statusLine = `⚠️ <b>${remaining} tasks pending!</b> Aage badho aur khatam karo.`
       }
-    } else if (text === "/tomorrow") {
+
+      const reply = `<b>📅 AAJ KA BATTLE PLAN (${todayStr} · Week ${weekNumber}, Day ${dayNumber})</b>\n\n` +
+        `<b>North Star:</b> <i>"${why}"</i>\n\n` +
+        `💻 <b>NeetCode 150 Targets:</b>\n${ncListText}\n\n` +
+        `🧠 <b>CS Micro-Topic:</b>\n${csTopicText}\n\n` +
+        `📊 <b>Progress:</b> ${dailyStatus?.must_do_done || 0}/${dailyStatus?.must_do_total || 4} done | ${statusLine}\n` +
+        (remainingTasks.length > 0 ? `\n<b>Bache huye items:</b>\n${remainingTasks.map((t: string) => `• ${t}`).join("\n")}` : "")
+
+      await sendTelegramMessage(chatId, reply, {
+        inline_keyboard: [
+          [
+            { text: "💤 Snooze 1h", callback_data: "snooze_1h" },
+            { text: "📱 Open App", url: APP_URL },
+          ],
+        ],
+      })
+    } else if (command === "/tomorrow") {
+      // Immediate typing indicator while Gemini analyzes and thinks!
+      await sendChatAction(chatId, "typing")
+
       // Calculate tomorrow's plan
       const now = new Date()
       const tomorrowObj = new Date(now)
       tomorrowObj.setDate(tomorrowObj.getDate() + 1)
       const tomorrowStr = tomorrowObj.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
       const tomorrowWeekday = tomorrowObj.toLocaleDateString("en-US", { timeZone: "Asia/Kolkata", weekday: "long" })
+
+      const { weekNumber: tomWeek, dayNumber: tomDay } = getWeekAndDay(planStartDate, tomorrowStr)
+      const tomorrowNeetCode = NEETCODE_150.filter(p => p.weekNumber === tomWeek && p.dayNumber === tomDay)
+      const tomorrowCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === tomWeek && t.dayNumber === tomDay)
 
       const { data: planWeekRecords } = await supabase
         .from("sync_records")
@@ -363,45 +447,61 @@ serve(async (req: Request) => {
       }
 
       if (!matchingWeek) {
-        matchingWeek = DEFAULT_PLAN_WEEKS.find((w) => tomorrowStr >= w.startDate && tomorrowStr <= w.endDate)
+        matchingWeek = DEFAULT_PLAN_WEEKS.find((w) => tomorrowStr >= w.startDate && tomorrowStr <= w.endDate) || DEFAULT_PLAN_WEEKS[1]
       }
 
-      let planReply = matchingWeek
-        ? `🎯 <b>TOMORROW'S BATTLE PLAN (${tomorrowWeekday}, ${tomorrowStr})</b>\n\n` +
-          `• <b>Week ${matchingWeek.weekNumber}:</b> ${matchingWeek.focusTopic}\n` +
-          `• <b>DSA Target:</b> ${matchingWeek.dsaGoal}\n` +
-          `• <b>System Design / CS:</b> ${matchingWeek.studyGoal}\n\n` +
-          `<i>"Tomorrow you don't negotiate with your laziness. You wake up and execute."</i>`
-        : `🎯 <b>TOMORROW'S PLAN (${tomorrowWeekday}, ${tomorrowStr})</b>\n\nPlan begins on 11th Nov. Review terminology and set up your environment!`
+      let ncListText = tomorrowNeetCode.map(p => `• <a href="${p.url}">${p.title}</a> (${p.difficulty}, ⏱️ ${p.estMinutes}m)`).join("\n")
+      if (!ncListText) ncListText = `• ${matchingWeek.dsaGoal}`
 
-      if (matchingWeek) {
-        try {
-          const aiPlan = await generateAITomorrowPlan({
-            todayDate: todayStr,
-            tomorrowDate: tomorrowStr,
-            tomorrowWeekday,
-            weekNumber: matchingWeek.weekNumber,
-            focusTopic: matchingWeek.focusTopic,
-            dsaGoal: matchingWeek.dsaGoal,
-            studyGoal: matchingWeek.studyGoal,
-            mustDoTotal: dailyStatus?.must_do_total || 4,
-            mustDoDone: dailyStatus?.must_do_done || 0,
-            remainingTitles: dailyStatus?.remaining_titles || [],
-            streak: 0,
-            whyIMustSwitch: why,
-          })
-          if (aiPlan) {
-            planReply = aiPlan
-          }
-        } catch (e) {
-          console.warn("AI plan generation error, using standard template:", e)
+      let csTopicText = tomorrowCsTopic
+        ? `• <b>${tomorrowCsTopic.title}</b> (⏱️ ${tomorrowCsTopic.estMinutes}m)\n  <i>${tomorrowCsTopic.deliverable}</i>`
+        : `• ${matchingWeek.studyGoal}`
+
+      let planReply = `🎯 <b>KAL KA BATTLE PLAN (${tomorrowWeekday}, ${tomorrowStr} · Week ${tomWeek}, Day ${tomDay})</b>\n\n` +
+        `• <b>Focus Topic:</b> ${matchingWeek.focusTopic}\n\n` +
+        `💻 <b>NeetCode 150 Targets:</b>\n${ncListText}\n\n` +
+        `🧠 <b>CS Micro-Topic:</b>\n${csTopicText}\n\n` +
+        `<i>"Kal subah apne laziness se koi negotiation nahi. Utho, code editor kholo aur execute karo."</i>`
+
+      try {
+        const aiPlan = await generateAITomorrowPlan({
+          todayDate: todayStr,
+          tomorrowDate: tomorrowStr,
+          tomorrowWeekday,
+          weekNumber: tomWeek,
+          dayNumber: tomDay,
+          focusTopic: matchingWeek.focusTopic,
+          dsaGoal: matchingWeek.dsaGoal,
+          studyGoal: matchingWeek.studyGoal,
+          mustDoTotal: dailyStatus?.must_do_total || 4,
+          mustDoDone: dailyStatus?.must_do_done || 0,
+          remainingTitles: dailyStatus?.remaining_titles || [],
+          streak: 0,
+          whyIMustSwitch: why,
+          tomorrowNeetCode: tomorrowNeetCode.map(p => ({
+            title: p.title,
+            difficulty: p.difficulty,
+            estMinutes: p.estMinutes,
+            url: p.url,
+          })),
+          tomorrowCsTopic: tomorrowCsTopic ? {
+            title: tomorrowCsTopic.title,
+            estMinutes: tomorrowCsTopic.estMinutes,
+            deliverable: tomorrowCsTopic.deliverable,
+          } : null,
+        })
+        if (aiPlan) {
+          planReply = aiPlan
         }
+      } catch (e) {
+        console.warn("AI plan generation error, using fallback template:", e)
       }
 
       await sendTelegramMessage(chatId, planReply, {
         inline_keyboard: [[{ text: "📱 Open App", url: APP_URL }]],
       })
-    } else if (text === "/done") {
+    } else if (command === "/done") {
+      await sendChatAction(chatId, "typing")
       if (!dailyStatus) {
         await sendTelegramMessage(chatId, "Open the app to log your tasks first.")
       } else if (dailyStatus.must_do_done >= dailyStatus.must_do_total) {
@@ -425,7 +525,7 @@ serve(async (req: Request) => {
           "\n\nNo shortcuts. Sit down, complete them, or mark partial progress in the app."
         )
       }
-    } else if (text === "/snooze") {
+    } else if (command === "/snooze") {
       const snoozeUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString()
       await supabase
         .from("daily_status")
@@ -434,10 +534,10 @@ serve(async (req: Request) => {
         .eq("date", todayStr)
 
       await sendTelegramMessage(chatId, "💤 Reminders snoozed for 1 hour. Make sure you return to your desk!")
-    } else if (text === "/help") {
+    } else if (command === "/help") {
       const help = "<b>Job Switch Tracker Hardcore Bot Commands:</b>\n\n" +
         "/today - View today's checklist and progress\n" +
-        "/tomorrow - View tomorrow's battle plan\n" +
+        "/tomorrow - View tomorrow's battle plan (Gemini AI)\n" +
         "/done - Mark today complete and lock in your streak\n" +
         "/snooze - Snooze nagging for 1 hour\n" +
         "/status - Summary of your current preparation streak\n" +

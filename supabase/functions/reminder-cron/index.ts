@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4"
 import { shouldSend, ReminderSettings, DailyStatus, ReminderLogEntry, MessageToSend, TomorrowPlanSummary } from "../_shared/shouldSend.ts"
 import { generateAITomorrowPlan, generateAINagMessage } from "../_shared/gemini.ts"
+import { NEETCODE_150 } from "../_shared/neetcode150.ts"
+import { CS_MICRO_CURRICULUM } from "../_shared/csMicroCurriculum.ts"
 
 const CRON_SECRET = Deno.env.get("CRON_SECRET") || ""
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || ""
@@ -160,7 +162,20 @@ async function sendTelegram(chatId: number, message: MessageToSend): Promise<{ o
 
   if (!res.ok) {
     const errText = await res.text()
-    return { ok: false, status: res.status, error: errText }
+    console.warn("Telegram sendMessage failed with HTML mode:", errText)
+    // Retry as plain text if HTML tags/parsing caused error
+    const retryRes = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message.text.replace(/<[^>]*>/g, ""),
+        reply_markup: { inline_keyboard: keyboard },
+      }),
+    })
+    if (!retryRes.ok) {
+      return { ok: false, status: res.status, error: errText }
+    }
   }
   return { ok: true, status: 200 }
 }
@@ -332,25 +347,52 @@ serve(async (req: Request) => {
       // User channels
       const userChannels = (channels || []).filter((c) => c.user_id === userId)
 
+      function getWeekAndDay(planStartDate: string, targetDateStr: string): { weekNumber: number; dayNumber: number } {
+        const dStart = new Date(planStartDate + "T00:00:00+05:30").getTime()
+        const dTarget = new Date(targetDateStr + "T00:00:00+05:30").getTime()
+        const diffDays = Math.floor((dTarget - dStart) / 86400000)
+        if (diffDays < 0) return { weekNumber: 1, dayNumber: 1 }
+        const weekNumber = Math.min(Math.floor(diffDays / 7) + 1, 8)
+        const dayNumber = (diffDays % 7) + 1
+        return { weekNumber, dayNumber }
+      }
+
       for (const msg of messages) {
         let dispatchMsg = { ...msg }
 
         // Use Gemini API dynamically for Nightly Tomorrow Plan
         if (msg.kind === 'next_day_plan' && tomorrowPlanSummary) {
           try {
+            const planStartDate = settings.plan_start_date || "2026-11-11"
+            const { weekNumber: tomWeek, dayNumber: tomDay } = getWeekAndDay(planStartDate, tomorrowPlanSummary.dateStr)
+            const tomorrowNeetCode = NEETCODE_150.filter(p => p.weekNumber === tomWeek && p.dayNumber === tomDay)
+            const tomorrowCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === tomWeek && t.dayNumber === tomDay)
+
             const aiPlan = await generateAITomorrowPlan({
               todayDate: now.dateStr,
               tomorrowDate: tomorrowPlanSummary.dateStr,
               tomorrowWeekday: tomorrowPlanSummary.weekdayName,
-              weekNumber: tomorrowPlanSummary.weekNumber,
+              weekNumber: tomWeek,
+              dayNumber: tomDay,
               focusTopic: tomorrowPlanSummary.focusTopic,
               dsaGoal: tomorrowPlanSummary.dsaGoal,
               studyGoal: tomorrowPlanSummary.studyGoal,
               mustDoTotal: status?.must_do_total || 4,
               mustDoDone: status?.must_do_done || 0,
               remainingTitles: status?.remaining_titles || [],
-              streak: 0,
+              streak: status?.streak || 0,
               whyIMustSwitch: settings.why_i_must_switch || '',
+              tomorrowNeetCode: tomorrowNeetCode.map(p => ({
+                title: p.title,
+                difficulty: p.difficulty,
+                estMinutes: p.estMinutes,
+                url: p.url,
+              })),
+              tomorrowCsTopic: tomorrowCsTopic ? {
+                title: tomorrowCsTopic.title,
+                estMinutes: tomorrowCsTopic.estMinutes,
+                deliverable: tomorrowCsTopic.deliverable,
+              } : null,
             })
             if (aiPlan) {
               dispatchMsg.text = aiPlan
@@ -366,7 +408,7 @@ serve(async (req: Request) => {
             const aiNag = await generateAINagMessage({
               todayDate: now.dateStr,
               remainingTasks: status.remaining_titles,
-              streak: 0,
+              streak: status?.streak || 0,
               whyIMustSwitch: settings.why_i_must_switch || '',
               currentHour: now.hour,
             })

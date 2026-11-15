@@ -1,5 +1,5 @@
 import { addDays } from './dates'
-import type { SolveResult, ReviewResult } from '../db/db'
+import type { SolveResult, ReviewResult, NeetCodeSolveResult } from '../db/db'
 
 export interface SpacedRepSchedule {
   nextReview: string
@@ -7,12 +7,12 @@ export interface SpacedRepSchedule {
   reviewCount: number
 }
 
-// Intervals in days for first-time scheduling after solve
+// Intervals in days for first-time scheduling after solve (legacy)
 const INITIAL_INTERVALS = [1, 3, 7, 14]
 
 /**
  * Calculate first review schedule after solving a problem.
- * Hints or Failed: start at +1 day. Solved alone: +1 day (same).
+ * Legacy behavior: starts at +1 day.
  */
 export function scheduleAfterSolve(
   dateSolved: string,
@@ -27,7 +27,68 @@ export function scheduleAfterSolve(
 }
 
 /**
- * Calculate next review after a review session.
+ * NeetCode 150 Spaced Repetition Rules:
+ * - Solved alone: +7 days
+ * - Solved with hints: +2 days
+ * - Failed / Looked up: +1 day
+ */
+export function scheduleNeetCodeAfterSolve(
+  dateSolved: string,
+  result: NeetCodeSolveResult
+): SpacedRepSchedule {
+  let interval = 7
+  if (result === 'hints') interval = 2
+  else if (result === 'failed') interval = 1
+
+  return {
+    nextReview: addDays(dateSolved, interval),
+    reviewInterval: interval,
+    reviewCount: 0,
+  }
+}
+
+/**
+ * NeetCode 150 Review Checkoff Rules:
+ * - easy: advance to 7 -> 14 -> 30 -> 60 days
+ * - hard: repeat in +2 days
+ * - forgot: reset to +1 day (count resets to 0)
+ */
+export function scheduleNeetCodeAfterReview(
+  reviewDate: string,
+  result: ReviewResult,
+  currentInterval: number,
+  reviewCount: number
+): SpacedRepSchedule {
+  let nextInterval: number
+  let nextCount = reviewCount + 1
+
+  if (result === 'forgot') {
+    nextInterval = 1
+    nextCount = 0
+  } else if (result === 'hard') {
+    nextInterval = 2
+  } else {
+    // easy
+    if (currentInterval < 7) {
+      nextInterval = 7
+    } else if (currentInterval < 14) {
+      nextInterval = 14
+    } else if (currentInterval < 30) {
+      nextInterval = 30
+    } else {
+      nextInterval = Math.min(currentInterval * 2, 60)
+    }
+  }
+
+  return {
+    nextReview: addDays(reviewDate, nextInterval),
+    reviewInterval: nextInterval,
+    reviewCount: nextCount,
+  }
+}
+
+/**
+ * Calculate next review after a review session (legacy).
  * - easy:   advance to next interval in sequence
  * - hard:   stay at current interval
  * - forgot: reset to +1 day

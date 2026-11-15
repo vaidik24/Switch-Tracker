@@ -9,6 +9,9 @@ import RevisionQueue from '../components/RevisionQueue'
 import JobActions from '../components/JobActions'
 import CarryOver from '../components/CarryOver'
 import DoneButton from '../components/DoneButton'
+import NeetCodeDailySection from '../components/NeetCodeDailySection'
+import CsMicroTaskCard from '../components/CsMicroTaskCard'
+import NeetCodeRevisionQueue from '../components/NeetCodeRevisionQueue'
 import { useSync } from '../store/useSyncStore'
 import { recordLocalChange, pushDailyStatus } from '../lib/syncEngine'
 
@@ -113,6 +116,76 @@ export default function Today() {
     : 0
   const weekNum = Math.floor(daysSinceStart / 7) + 1
   const dayNum = (daysSinceStart % 7) + 1
+
+  const effectiveWeekNum = weekNum >= 1 && weekNum <= 8 ? weekNum : 1
+  const effectiveDayNum = dayNum >= 1 && dayNum <= 7 ? dayNum : 1
+
+  const todayNeetCode = useLiveQuery(() =>
+    db.neetcodeProblems.where('weekNumber').equals(effectiveWeekNum).and(p => p.dayNumber === effectiveDayNum).toArray(),
+    [effectiveWeekNum, effectiveDayNum]
+  )
+
+  const todayCsTask = useLiveQuery(() =>
+    db.csMicroTasks.where('weekNumber').equals(effectiveWeekNum).and(t => t.dayNumber === effectiveDayNum).first(),
+    [effectiveWeekNum, effectiveDayNum]
+  )
+
+  const dueNeetCodeRevisions = useLiveQuery(() =>
+    db.neetcodeProblems.where('nextReviewAt').belowOrEqual(today).and(p => p.status !== 'unsolved').toArray(),
+    [today]
+  )
+
+  // Tomorrow targets
+  const tomorrowDaysSinceStart = daysSinceStart + 1
+  const tomorrowWeekNum = Math.floor(tomorrowDaysSinceStart / 7) + 1
+  const tomorrowDayNum = (tomorrowDaysSinceStart % 7) + 1
+  const effectiveTomWeek = tomorrowWeekNum >= 1 && tomorrowWeekNum <= 8 ? tomorrowWeekNum : 1
+  const effectiveTomDay = tomorrowDayNum >= 1 && tomorrowDayNum <= 7 ? tomorrowDayNum : 1
+
+  const tomorrowNeetCode = useLiveQuery(() =>
+    db.neetcodeProblems.where('weekNumber').equals(effectiveTomWeek).and(p => p.dayNumber === effectiveTomDay).toArray(),
+    [effectiveTomWeek, effectiveTomDay]
+  )
+
+  const tomorrowCsTask = useLiveQuery(() =>
+    db.csMicroTasks.where('weekNumber').equals(effectiveTomWeek).and(t => t.dayNumber === effectiveTomDay).first(),
+    [effectiveTomWeek, effectiveTomDay]
+  )
+
+  async function checkDailySync() {
+    const existing = await db.dailyLogs.get(today)
+    const current = existing?.checklistState ?? {}
+    let changed = false
+    const newState = { ...current }
+
+    if (todayNeetCode && todayNeetCode.length > 0) {
+      const allSolved = todayNeetCode.every(p => p.status === 'solved' || p.status === 'needs_revision')
+      if (allSolved && !current['dsa-new']) {
+        newState['dsa-new'] = true
+        changed = true
+      }
+    }
+
+    if (todayCsTask?.completed && !current['topic-study']) {
+      newState['topic-study'] = true
+      changed = true
+    }
+
+    if (changed) {
+      const updated = {
+        date: today,
+        checklistState: newState,
+        doneForToday: existing?.doneForToday ?? false,
+        missReason: existing?.missReason ?? null,
+        notes: existing?.notes ?? '',
+        streak,
+        completedAt: existing?.completedAt ?? null,
+      }
+      await db.dailyLogs.put(updated)
+      await recordLocalChange('dailyLogs', today, 'upsert', updated)
+      await pushDailyStatus()
+    }
+  }
 
   const progressPct = checklistItems.length > 0
     ? Math.round((checkedCount / checklistItems.length) * 100)
@@ -246,6 +319,28 @@ export default function Today() {
         <CarryOver items={missedYesterday} />
       )}
 
+      {/* NeetCode 150 Daily Targets */}
+      <NeetCodeDailySection
+        problems={todayNeetCode ?? []}
+        today={today}
+        onProblemsUpdated={checkDailySync}
+      />
+
+      {/* CS / System Design Micro-Topic */}
+      <CsMicroTaskCard
+        task={todayCsTask ?? null}
+        onTaskUpdated={checkDailySync}
+      />
+
+      {/* NeetCode Spaced Revision Queue */}
+      {dueNeetCodeRevisions && dueNeetCodeRevisions.length > 0 && (
+        <NeetCodeRevisionQueue
+          problems={dueNeetCodeRevisions}
+          today={today}
+          onRevisionDone={checkDailySync}
+        />
+      )}
+
       {/* Today's Checklist */}
       <div className="card p-4 mb-4">
         <div className="flex items-center justify-between mb-3">
@@ -278,7 +373,7 @@ export default function Today() {
         )}
       </div>
 
-      {/* DSA Revision Queue */}
+      {/* DSA Revision Queue (Legacy manual entries) */}
       {dueProblems && dueProblems.length > 0 && (
         <RevisionQueue problems={dueProblems} today={today} />
       )}
@@ -310,7 +405,7 @@ export default function Today() {
               </h3>
             </div>
             <span className="text-[10px] text-brand-400 font-semibold">
-              Week {tomorrowWeek.weekNumber}
+              Week {effectiveTomWeek}, Day {effectiveTomDay}
             </span>
           </div>
 
@@ -318,19 +413,51 @@ export default function Today() {
             {tomorrowWeek.focusTopic}
           </p>
 
-          <div className="space-y-1.5 text-xs text-gray-400 bg-surface-300/30 p-2.5 rounded-lg">
-            <div className="flex items-start gap-2">
-              <span className="text-emerald-400">💻</span>
-              <span>{tomorrowWeek.dsaGoal}</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-purple-400">📚</span>
-              <span>{tomorrowWeek.studyGoal}</span>
-            </div>
+          <div className="space-y-2 text-xs text-gray-400 bg-surface-300/30 p-2.5 rounded-lg border border-white/5">
+            {tomorrowNeetCode && tomorrowNeetCode.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-emerald-400 font-semibold text-[11px] flex items-center gap-1.5">
+                  <span>💻</span>
+                  <span>DSA Targets ({tomorrowNeetCode.length} questions):</span>
+                </span>
+                <div className="pl-5 space-y-1">
+                  {tomorrowNeetCode.map(p => (
+                    <div key={p.id} className="text-gray-300 text-[11px] flex items-center gap-2">
+                      <span className="text-gray-500">•</span>
+                      <span className="font-medium text-gray-200">{p.title}</span>
+                      <span className="text-[9px] px-1.5 rounded bg-white/5 text-gray-400">{p.difficulty}</span>
+                      <span className="text-[10px] text-gray-500">⏱️ {p.estMinutes}m</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2">
+                <span className="text-emerald-400">💻</span>
+                <span>{tomorrowWeek.dsaGoal}</span>
+              </div>
+            )}
+
+            {tomorrowCsTask ? (
+              <div className="flex flex-col gap-1 pt-1 border-t border-white/5">
+                <span className="text-purple-400 font-semibold text-[11px] flex items-center gap-1.5">
+                  <span>🧠</span>
+                  <span>CS / System Design ({tomorrowCsTask.estMinutes}m):</span>
+                </span>
+                <p className="pl-5 text-gray-200 text-[11px] font-medium">
+                  {tomorrowCsTask.title}
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2">
+                <span className="text-purple-400">📚</span>
+                <span>{tomorrowWeek.studyGoal}</span>
+              </div>
+            )}
           </div>
 
           <p className="text-[11px] text-gray-500 mt-2 text-center italic">
-            This plan will be sent directly to your Telegram at {settings?.nextDayPlanTime || '21:30'} tonight.
+            This detailed plan will be dispatched to your Telegram at {settings?.nextDayPlanTime || '21:30'} tonight.
           </p>
         </div>
       )}
