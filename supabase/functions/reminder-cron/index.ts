@@ -13,76 +13,76 @@ const APP_URL = Deno.env.get("APP_URL") || "https://tracker.vaidik.dev"
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-// Default 2-month plan schedule (11 Nov 2026 - 10 Jan 2027) fallback
+// Default 2-month plan schedule (16 Nov 2026 - 15 Jan 2027) fallback
 const DEFAULT_PLAN_WEEKS = [
   {
     weekNumber: 0,
-    startDate: '2026-11-09',
-    endDate: '2026-11-10',
+    startDate: '2026-11-14',
+    endDate: '2026-11-15',
     focusTopic: 'Baseline & Environment Setup',
     dsaGoal: 'Solve 3 medium problems timed; setup spaced repetition',
     studyGoal: 'Read terminology list end-to-end; configure Telegram reminders',
   },
   {
     weekNumber: 1,
-    startDate: '2026-11-11',
-    endDate: '2026-11-17',
+    startDate: '2026-11-16',
+    endDate: '2026-11-22',
     focusTopic: 'Arrays, Two Pointers, Sliding Window + OS & Node.js',
     dsaGoal: '20-25 problems: arrays, hashing, two pointers, sliding window',
     studyGoal: 'OS: processes, threads, event loop phases, scheduling, memory leaks',
   },
   {
     weekNumber: 2,
-    startDate: '2026-11-18',
-    endDate: '2026-11-24',
+    startDate: '2026-11-23',
+    endDate: '2026-11-29',
     focusTopic: 'Stack, Monotonic Stack, Binary Search, Linked Lists + DBMS',
     dsaGoal: '25 problems: stack, monotonic stack, binary search, linked lists',
     studyGoal: 'DBMS: ACID, B-Tree indexes, isolation levels, transactions, EXPLAIN ANALYZE',
   },
   {
     weekNumber: 3,
-    startDate: '2026-11-25',
-    endDate: '2026-12-01',
+    startDate: '2026-11-30',
+    endDate: '2026-12-06',
     focusTopic: 'Trees, BST, Heaps, Priority Queues + Networks & Auth',
     dsaGoal: '25 problems: binary trees, BST traversal, heaps, top-K',
     studyGoal: 'Networks: HTTP/1.1-3, TCP, TLS, WebSockets, JWT, OAuth2 sessions',
   },
   {
     weekNumber: 4,
-    startDate: '2026-12-02',
-    endDate: '2026-12-08',
+    startDate: '2026-12-07',
+    endDate: '2026-12-13',
     focusTopic: 'Graphs (BFS/DFS), Topological Sort, Union Find + LLD 1-3',
     dsaGoal: '25 problems: graph BFS/DFS, cycle detection, topological sort, union find',
     studyGoal: 'OOP, SOLID, Design Patterns, LLD 1-3 (LRU/LFU cache, Rate limiter, Parking lot)',
   },
   {
     weekNumber: 5,
-    startDate: '2026-12-09',
-    endDate: '2026-12-15',
+    startDate: '2026-12-14',
+    endDate: '2026-12-20',
     focusTopic: 'Backtracking, Intervals, Greedy, 1D DP + LLD 4-8',
     dsaGoal: '25 problems: intervals, greedy, 1D dynamic programming',
     studyGoal: 'LLD 4-8: BookMyShow concurrency, Splitwise, Elevator, In-memory KV store with TTL',
   },
   {
     weekNumber: 6,
-    startDate: '2026-12-16',
-    endDate: '2026-12-22',
+    startDate: '2026-12-21',
+    endDate: '2026-12-27',
     focusTopic: '2D DP, Shortest Path (Dijkstra), Trie + HLD Systems',
     dsaGoal: '20 problems: 2D DP, Dijkstra, Trie',
     studyGoal: 'HLD Core: Load balancers, CDN, Caching strategies, Partitioning, Kafka & Redis deep dive',
   },
   {
     weekNumber: 7,
-    startDate: '2026-12-23',
-    endDate: '2026-12-29',
+    startDate: '2026-12-28',
+    endDate: '2027-01-03',
     focusTopic: 'Complex System Design (HLD) + Behavioural Mastery',
     dsaGoal: '15 hard/mixed problem drills + spaced revision',
     studyGoal: 'HLD Systems: Chat/WhatsApp, Video Upload, Distributed Idempotent Payment/Ledger',
   },
   {
     weekNumber: 8,
-    startDate: '2026-12-30',
-    endDate: '2027-01-10',
+    startDate: '2027-01-04',
+    endDate: '2027-01-15',
     focusTopic: 'Full Timed Mocks + FULL JOB APPLICATION DRIVE',
     dsaGoal: '10 timed mocks (2 problems in 60 min) + revise weak patterns',
     studyGoal: 'Full mock interviews aloud, AI debugging scenarios, final interview polish',
@@ -233,12 +233,23 @@ serve(async (req: Request) => {
 
     // 3. Process each user
     for (const userId of userIds) {
-      // Fetch settings
-      const { data: rawSettings } = await supabase
-        .from("reminder_settings")
-        .select("*")
-        .eq("user_id", userId)
-        .single()
+      // Fetch settings and synced user data
+      const [{ data: rawSettings }, { data: syncedSettingsRecord }] = await Promise.all([
+        supabase
+          .from("reminder_settings")
+          .select("*")
+          .eq("user_id", userId)
+          .single(),
+        supabase
+          .from("sync_records")
+          .select("data")
+          .eq("user_id", userId)
+          .eq("entity", "settings")
+          .eq("deleted", false)
+          .maybeSingle(),
+      ])
+
+      const planStartDate = syncedSettingsRecord?.data?.planStartDate || rawSettings?.plan_start_date || "2026-11-16"
 
       const settings: ReminderSettings = {
         timezone: rawSettings?.timezone || "Asia/Kolkata",
@@ -248,7 +259,8 @@ serve(async (req: Request) => {
         final_time: rawSettings?.final_time?.slice(0, 5) || "22:00",
         next_day_plan_time: rawSettings?.next_day_plan_time?.slice(0, 5) || "21:30",
         accountability_tone: rawSettings?.accountability_tone || "hardcore",
-        why_i_must_switch: rawSettings?.why_i_must_switch || "To escape career stagnation and master engineering at scale",
+        why_i_must_switch: syncedSettingsRecord?.data?.whyIMustSwitch || rawSettings?.why_i_must_switch || "To escape career stagnation and master engineering at scale",
+        plan_start_date: planStartDate,
         nag_enabled: rawSettings?.nag_enabled ?? true,
         nag_interval_minutes: rawSettings?.nag_interval_minutes ?? 30,
         quiet_start: rawSettings?.quiet_start?.slice(0, 5) || "23:30",
@@ -300,22 +312,13 @@ serve(async (req: Request) => {
       const tomorrowDateStr = tomorrowObj.toLocaleDateString("en-CA", { timeZone: settings.timezone })
       const tomorrowWeekday = tomorrowObj.toLocaleDateString("en-US", { timeZone: settings.timezone, weekday: "short" })
 
-      // Check synced plan weeks and settings
-      const [{ data: planWeekRecords }, { data: syncedSettingsRecord }] = await Promise.all([
-        supabase
-          .from("sync_records")
-          .select("data")
-          .eq("user_id", userId)
-          .eq("entity", "planWeeks")
-          .eq("deleted", false),
-        supabase
-          .from("sync_records")
-          .select("data")
-          .eq("user_id", userId)
-          .eq("entity", "settings")
-          .eq("deleted", false)
-          .maybeSingle(),
-      ])
+      // Check synced plan weeks
+      const { data: planWeekRecords } = await supabase
+        .from("sync_records")
+        .select("data")
+        .eq("user_id", userId)
+        .eq("entity", "planWeeks")
+        .eq("deleted", false)
 
       let matchingWeek: any = null
       if (planWeekRecords && planWeekRecords.length > 0) {

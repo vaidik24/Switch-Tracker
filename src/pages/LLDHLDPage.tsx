@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
 import db from '../db/db'
 import type { LLDHLDItem, LLDHLDCategory } from '../db/db'
+import { recordLocalChange } from '../lib/syncEngine'
 
 const STAGES_LLD = [
   'Requirements clarified',
@@ -92,10 +93,19 @@ function DesignItem({ item, stages }: { item: LLDHLDItem; stages: string[] }) {
       [stage]: !item.stagesState[stage],
     }
     await db.lldHldItems.update(item.id!, { stagesState: newState })
+    await recordLocalChange('lldHldItems', item.id!, 'upsert', {
+      ...item,
+      stagesState: newState,
+    })
   }
 
   async function saveNotes() {
     await db.lldHldItems.update(item.id!, { notes, link })
+    await recordLocalChange('lldHldItems', item.id!, 'upsert', {
+      ...item,
+      notes,
+      link,
+    })
   }
 
   return (

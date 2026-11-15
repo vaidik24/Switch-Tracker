@@ -1,13 +1,16 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
-import db from '../db/db'
-import { formatDateShort, todayIST, formatDateLong } from '../lib/dates'
+import db, { PlanWeek } from '../db/db'
+import { formatDateShort, todayIST, formatDateLong, dateRange } from '../lib/dates'
 import { recalculatePlanWeeksFromNewStart, shiftPlanByDays } from '../lib/planShift'
 import { recordLocalChange } from '../lib/syncEngine'
 
 export default function Plan() {
   const planWeeks = useLiveQuery(() => db.planWeeks.orderBy('weekNumber').toArray())
   const settings = useLiveQuery(() => db.settings.toArray().then(r => r[0]))
+  const allLogs = useLiveQuery(() => db.dailyLogs.toArray())
+  const allNeetCode = useLiveQuery(() => db.neetcodeProblems.toArray())
+  const allCsTasks = useLiveQuery(() => db.csMicroTasks.toArray())
   const [shiftN, setShiftN] = useState(1)
   const [shiftOpen, setShiftOpen] = useState(false)
   const [resetModalOpen, setResetModalOpen] = useState(false)
@@ -70,6 +73,44 @@ export default function Plan() {
 
   const firstWeek = planWeeks?.find(w => w.weekNumber === 1)
   const lastWeek = planWeeks?.find(w => w.weekNumber === 8)
+
+  function getWeekCompletion(week: PlanWeek): number {
+    if (!week) return 0
+
+    if (week.isBaseline || week.weekNumber === 0) {
+      let best = 0
+      for (const log of (allLogs || [])) {
+        if (log.date <= week.endDate) {
+          if (log.doneForToday) return 100
+          if (log.checklistState) {
+            const vals = Object.values(log.checklistState)
+            if (vals.length > 0) {
+              const checked = vals.filter(Boolean).length
+              best = Math.max(best, Math.round((checked / vals.length) * 100))
+            }
+          }
+        }
+      }
+      return Math.max(best, week.completionPct || 0)
+    }
+
+    // Regular week
+    const ncForWeek = allNeetCode?.filter(p => p.weekNumber === week.weekNumber) || []
+    const ncSolved = ncForWeek.filter(p => p.status === 'solved' || p.status === 'needs_revision').length
+
+    const csForWeek = allCsTasks?.filter(t => t.weekNumber === week.weekNumber) || []
+    const csSolved = csForWeek.filter(t => t.completed).length
+
+    const totalCurriculum = ncForWeek.length + csForWeek.length
+    const solvedCurriculum = ncSolved + csSolved
+    const curriculumPct = totalCurriculum > 0 ? Math.round((solvedCurriculum / totalCurriculum) * 100) : 0
+
+    const dates = dateRange(week.startDate, week.endDate)
+    const daysDone = dates.filter(d => allLogs?.find(l => l.date === d)?.doneForToday).length
+    const daysPct = dates.length > 0 ? Math.round((daysDone / dates.length) * 100) : 0
+
+    return Math.max(curriculumPct, daysPct, week.completionPct || 0)
+  }
 
   return (
     <div className="px-4 py-4 animate-fade-in">
@@ -208,21 +249,30 @@ export default function Plan() {
         {planWeeks?.map(week => {
           const isCurrent = today >= week.startDate && today <= week.endDate
           const isPast = week.endDate < today
+          const completionPct = getWeekCompletion(week)
+          const isCompleted = completionPct === 100
 
           return (
             <div
               key={week.weekNumber}
               className={`card p-4 transition-all duration-200
-                ${isCurrent ? 'border-brand-500/50 ring-1 ring-brand-500/30' : ''}
-                ${isPast ? 'opacity-70' : ''}
+                ${isCompleted ? 'border-emerald-500/30 bg-emerald-950/10' : ''}
+                ${isCurrent && !isCompleted ? 'border-brand-500/50 ring-1 ring-brand-500/30' : ''}
+                ${isPast && !isCompleted ? 'opacity-70' : ''}
               `}
             >
               <div className="flex items-start gap-3">
                 {/* Week indicator */}
-                <div className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm
-                  ${isCurrent ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/30' : isPast ? 'bg-surface-300 text-gray-400' : 'bg-surface-200 text-gray-500'}`}
+                <div className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm transition-colors
+                  ${isCompleted
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : isCurrent
+                      ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/30'
+                      : isPast
+                        ? 'bg-surface-300 text-gray-400'
+                        : 'bg-surface-200 text-gray-500'}`}
                 >
-                  W{week.weekNumber}
+                  {isCompleted ? '✓' : `W${week.weekNumber}`}
                 </div>
 
                 <div className="flex-1 min-w-0">
@@ -233,8 +283,15 @@ export default function Plan() {
                       {formatDateShort(week.startDate)}
                       {week.startDate !== week.endDate ? ` → ${formatDateShort(week.endDate)}` : ''}
                     </p>
-                    {isCurrent && <span className="badge-brand">ACTIVE WEEK</span>}
-                    {isPast && <span className="badge bg-surface-300 text-gray-500">Done</span>}
+                    <div className="flex items-center gap-1.5">
+                      {isCompleted && (
+                        <span className="badge bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          Completed 🏆
+                        </span>
+                      )}
+                      {isCurrent && !isCompleted && <span className="badge-brand">ACTIVE WEEK</span>}
+                      {isPast && !isCompleted && <span className="badge bg-surface-300 text-gray-500">Done</span>}
+                    </div>
                   </div>
 
                   {/* Focus topic */}
@@ -257,16 +314,22 @@ export default function Plan() {
                   </div>
 
                   {/* Progress bar */}
-                  {(isCurrent || isPast) && (
+                  {(isCurrent || isPast || isCompleted) && (
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs text-gray-600">Completion</span>
-                        <span className="text-xs text-gray-500">{week.completionPct}%</span>
+                        <span className="text-xs text-gray-400">Completion</span>
+                        <span className={`text-xs font-semibold ${isCompleted ? 'text-emerald-400' : 'text-gray-300'}`}>
+                          {completionPct}%
+                        </span>
                       </div>
                       <div className="h-1.5 bg-surface-300 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-gradient-to-r from-brand-500 to-purple-500 rounded-full transition-all duration-500"
-                          style={{ width: `${week.completionPct}%` }}
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            isCompleted
+                              ? 'bg-emerald-500'
+                              : 'bg-gradient-to-r from-brand-500 to-purple-500'
+                          }`}
+                          style={{ width: `${completionPct}%` }}
                         />
                       </div>
                     </div>

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import db from '../db/db'
 import type { MockLog, MockType } from '../db/db'
 import { todayIST, formatDateShort } from '../lib/dates'
+import { recordLocalChange } from '../lib/syncEngine'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts'
@@ -120,7 +121,8 @@ function AddMockModal({ onClose, today }: { onClose: () => void; today: string }
   })
 
   async function save() {
-    await db.mockLogs.add(form)
+    const id = (await db.mockLogs.add(form)) as number
+    await recordLocalChange('mockLogs', id, 'upsert', { ...form, id })
     onClose()
   }
 

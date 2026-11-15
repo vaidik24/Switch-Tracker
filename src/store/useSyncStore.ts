@@ -76,7 +76,8 @@ export function useSync() {
         'settings', 'dailyLogs', 'problems', 'reviews', 'lldHldItems',
         'concepts', 'conceptReviews', 'stories', 'jobs', 'interviewRounds',
         'contacts', 'templates', 'mockLogs', 'weeklyReviews', 'planWeeks',
-        'checklistItems', 'offerComparisons', 'outbox', 'syncMeta'
+        'checklistItems', 'offerComparisons', 'neetcodeProblems', 'csMicroTasks',
+        'outbox', 'syncMeta'
       ]
       for (const t of tables) {
         // @ts-ignore

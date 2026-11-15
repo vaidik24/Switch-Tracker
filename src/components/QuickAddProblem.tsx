@@ -3,6 +3,7 @@ import db from '../db/db'
 import type { Problem, SolveResult, Difficulty } from '../db/db'
 import { todayIST } from '../lib/dates'
 import { scheduleAfterSolve } from '../lib/spacedRep'
+import { recordLocalChange, pushDailyStatus } from '../lib/syncEngine'
 
 const PATTERNS = [
   'Two pointers', 'Sliding window', 'Prefix sum', 'Hashing',
@@ -40,7 +41,7 @@ export default function QuickAddProblem({ onClose }: QuickAddProblemProps) {
     setSaving(true)
     try {
       const schedule = scheduleAfterSolve(today, result)
-      await db.problems.add({
+      const newProblem: Problem = {
         title: title.trim(),
         url: url.trim(),
         difficulty,
@@ -54,7 +55,10 @@ export default function QuickAddProblem({ onClose }: QuickAddProblemProps) {
         nextReview: schedule.nextReview,
         reviewInterval: schedule.reviewInterval,
         reviewCount: 0,
-      })
+      }
+      const id = (await db.problems.add(newProblem)) as number
+      await recordLocalChange('problems', id, 'upsert', { ...newProblem, id })
+      await pushDailyStatus()
       onClose()
     } catch (e) {
       console.error(e)

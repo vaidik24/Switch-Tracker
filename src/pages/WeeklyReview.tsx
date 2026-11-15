@@ -3,6 +3,8 @@ import { useState } from 'react'
 import db from '../db/db'
 import type { WeeklyReview } from '../db/db'
 import { todayIST, formatDateLong, weekStart } from '../lib/dates'
+import { calculateStreak } from '../lib/streak'
+import { recordLocalChange } from '../lib/syncEngine'
 
 export default function WeeklyReview() {
   const today = todayIST()
@@ -18,13 +20,20 @@ export default function WeeklyReview() {
   const existing = reviews?.find(r => r.weekStartDate === thisWeekStart)
 
   const problems = useLiveQuery(() => db.problems.toArray())
+  const ncProblems = useLiveQuery(() => db.neetcodeProblems.toArray())
   const logs = useLiveQuery(() => db.dailyLogs.toArray())
   const jobs = useLiveQuery(() => db.jobs.toArray())
 
-  // Auto-compute this week's stats
-  const thisWeekProblems = problems?.filter(p =>
+  // Auto-compute this week's stats (aggregating NeetCode 150 + custom problems)
+  const thisWeekCustomProblems = problems?.filter(p =>
     p.dateSolved >= thisWeekStart && p.dateSolved <= today
   ).length ?? 0
+
+  const thisWeekNcProblems = ncProblems?.filter(p =>
+    p.lastSolvedAt && p.lastSolvedAt.slice(0, 10) >= thisWeekStart && p.lastSolvedAt.slice(0, 10) <= today
+  ).length ?? 0
+
+  const thisWeekProblems = thisWeekCustomProblems + thisWeekNcProblems
 
   const thisWeekLogs = logs?.filter(l => l.date >= thisWeekStart && l.date <= today) ?? []
   const completedDays = thisWeekLogs.filter(l => l.doneForToday).length
@@ -35,11 +44,11 @@ export default function WeeklyReview() {
     j.dateApplied && j.dateApplied >= thisWeekStart && j.dateApplied <= today
   ).length ?? 0
 
-  const streak = logs?.filter(l => l.doneForToday).length ?? 0
+  const streak = logs ? calculateStreak(logs, today) : 0
 
   async function saveReview() {
     setSaving(true)
-    await db.weeklyReviews.put({
+    const reviewData = {
       weekStartDate: thisWeekStart,
       problemsSolved: thisWeekProblems,
       patternsCovered: [],
@@ -47,11 +56,13 @@ export default function WeeklyReview() {
       applicationsSent: thisWeekApplications,
       streak,
       missedItems: [],
-      whatWorked: worked,
-      whatSlipped: slipped,
-      planForNextWeek: nextWeekPlan,
+      whatWorked: worked || existing?.whatWorked || '',
+      whatSlipped: slipped || existing?.whatSlipped || '',
+      planForNextWeek: nextWeekPlan || existing?.planForNextWeek || '',
       createdAt: new Date().toISOString(),
-    })
+    }
+    await db.weeklyReviews.put(reviewData)
+    await recordLocalChange('weeklyReviews', thisWeekStart, 'upsert', reviewData)
     setSaving(false)
   }
 

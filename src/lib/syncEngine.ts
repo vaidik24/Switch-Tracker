@@ -1,7 +1,8 @@
 import db from '../db/db'
 import type { OutboxItem } from '../db/db'
 import { getSupabase } from './supabaseClient'
-import { todayIST } from './dates'
+import { todayIST, isWeekend } from './dates'
+import { getDailyChecklistItems } from './dailyTasks'
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline' | 'error'
 
@@ -39,7 +40,7 @@ export async function downloadLocalBackup(): Promise<void> {
     'settings', 'dailyLogs', 'problems', 'reviews', 'lldHldItems',
     'concepts', 'conceptReviews', 'stories', 'jobs', 'interviewRounds',
     'contacts', 'templates', 'mockLogs', 'weeklyReviews', 'planWeeks',
-    'checklistItems', 'offerComparisons'
+    'checklistItems', 'offerComparisons', 'neetcodeProblems', 'csMicroTasks'
   ]
 
   for (const t of tables) {
@@ -102,30 +103,31 @@ export async function pushDailyStatus(): Promise<void> {
 
   const today = todayIST()
   const log = await db.dailyLogs.get(today)
+  const settings = await db.settings.toArray().then(r => r[0])
 
-  // Calculate must-do tasks from ChecklistItems or DailyLog
-  const checklist = await db.checklistItems.toArray()
-  const remainingTitles: string[] = []
-  let mustDoTotal = 0
+  // Determine active plan context: Baseline vs Weekday vs Weekend
+  const planStartDate = settings?.planStartDate || '2026-11-16'
+  const daysSinceStart = Math.floor(
+    (new Date(today + 'T00:00:00+05:30').getTime() - new Date(planStartDate + 'T00:00:00+05:30').getTime()) / 86400000
+  )
+  const isBaselineDay = daysSinceStart < 0
+  const isWeekendDay = isWeekend(today)
+  const dailyItems = getDailyChecklistItems(isWeekendDay, settings?.weekendLightMode ?? false, isBaselineDay)
+
+  let mustDoTotal = dailyItems.length
   let mustDoDone = 0
+  const remainingTitles: string[] = []
 
-  if (checklist.length > 0) {
-    for (const item of checklist) {
-      mustDoTotal++
-      const checked = log?.checklistState?.[String(item.id)] ?? item.done
-      if (checked) {
-        mustDoDone++
-      } else {
-        remainingTitles.push(item.title)
-      }
+  for (const item of dailyItems) {
+    if (log?.checklistState?.[item.id]) {
+      mustDoDone++
+    } else {
+      remainingTitles.push(item.label)
     }
-  } else {
-    // Default fallback goals
-    mustDoTotal = 3
-    mustDoDone = log?.doneForToday ? 3 : 0
-    if (!log?.doneForToday) {
-      remainingTitles.push('DSA Revision', 'Topic of the Week', 'Application Follow-ups')
-    }
+  }
+
+  if (log?.doneForToday) {
+    mustDoDone = Math.max(mustDoDone, mustDoTotal)
   }
 
   // Calculate follow-ups due today from jobs and contacts
@@ -143,7 +145,6 @@ export async function pushDailyStatus(): Promise<void> {
     remaining_titles: remainingTitles,
     done_for_today: log?.doneForToday ?? false,
     rest_day: log?.missReason === 'rest day',
-    snoozed_until: null,
     followups_due: followupsDue,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id,date' })

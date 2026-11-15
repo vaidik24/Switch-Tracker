@@ -4,6 +4,8 @@ import type { DailyLog } from '../db/db'
 import { useAppStore } from '../store/useAppStore'
 import { hasRestDayThisWeek } from '../lib/streak'
 import { weekStart } from '../lib/dates'
+import { recordLocalChange, pushDailyStatus } from '../lib/syncEngine'
+import { getSupabase } from '../lib/supabaseClient'
 
 const MISS_REASONS = ['sick', 'travel', 'work overload', 'rest day'] as const
 type MissReason = typeof MISS_REASONS[number]
@@ -23,13 +25,14 @@ export default function DoneButton({
 }: DoneButtonProps) {
   const [showReasonPicker, setShowReasonPicker] = useState(false)
   const [selectedReason, setSelectedReason] = useState<MissReason | null>(null)
+  const [snoozedNotice, setSnoozedNotice] = useState(false)
   const { snoozeReminders } = useAppStore()
 
   const weekStartDate = weekStart(today)
   const restDayUsed = hasRestDayThisWeek(allLogs, weekStartDate)
 
   async function markDone(reason: MissReason | null = null) {
-    await db.dailyLogs.put({
+    const updatedLog: DailyLog = {
       date: today,
       checklistState,
       doneForToday: true,
@@ -37,8 +40,34 @@ export default function DoneButton({
       notes: todayLog?.notes ?? '',
       streak: streak + 1,
       completedAt: new Date().toISOString(),
-    })
+    }
+    await db.dailyLogs.put(updatedLog)
+    await recordLocalChange('dailyLogs', today, 'upsert', updatedLog)
+    await pushDailyStatus()
     setShowReasonPicker(false)
+  }
+
+  async function handleSnooze() {
+    snoozeReminders(60)
+    setSnoozedNotice(true)
+    setTimeout(() => setSnoozedNotice(false), 3000)
+
+    try {
+      const supabase = getSupabase()
+      if (supabase) {
+        const { data: sessionData } = await supabase.auth.getSession()
+        const user = sessionData?.session?.user
+        if (user) {
+          const snoozedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+          await supabase.from('daily_status').update({
+            snoozed_until: snoozedUntil,
+            updated_at: new Date().toISOString(),
+          }).eq('user_id', user.id).eq('date', today)
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to update remote snooze:', e)
+    }
   }
 
   if (alreadyDone) {
@@ -114,10 +143,10 @@ export default function DoneButton({
       </button>
 
       <button
-        onClick={() => snoozeReminders(60)}
+        onClick={handleSnooze}
         className="w-full py-3 rounded-xl text-sm text-gray-500 hover:text-gray-400 transition-colors"
       >
-        😴 Snooze reminders 1 hour
+        {snoozedNotice ? '😴 Reminders snoozed for 1 hour' : '😴 Snooze reminders 1 hour'}
       </button>
     </div>
   )

@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
 import db from '../db/db'
 import type { ChecklistItem, ChecklistType } from '../db/db'
+import { recordLocalChange } from '../lib/syncEngine'
 
 type Tab = 'resume' | 'linkedin'
 
@@ -17,6 +18,10 @@ export default function ChecklistsPage() {
 
   async function toggleItem(id: number, done: boolean) {
     await db.checklistItems.update(id, { done: !done })
+    const item = await db.checklistItems.get(id)
+    if (item) {
+      await recordLocalChange('checklistItems', id, 'upsert', item)
+    }
   }
 
   return (

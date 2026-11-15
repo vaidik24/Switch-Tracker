@@ -3,6 +3,7 @@ import db from '../db/db'
 import type { Problem } from '../db/db'
 import { scheduleAfterReview } from '../lib/spacedRep'
 import type { ReviewResult } from '../db/db'
+import { recordLocalChange, pushDailyStatus } from '../lib/syncEngine'
 
 interface RevisionQueueProps {
   problems: Problem[]
@@ -21,16 +22,31 @@ export default function RevisionQueue({ problems, today }: RevisionQueueProps) {
       problem.reviewCount,
       problem.result
     )
+    const updatedProblem = {
+      ...problem,
+      nextReview: schedule.nextReview,
+      reviewInterval: schedule.reviewInterval,
+      reviewCount: schedule.reviewCount,
+    }
     await db.problems.update(problem.id, {
       nextReview: schedule.nextReview,
       reviewInterval: schedule.reviewInterval,
       reviewCount: schedule.reviewCount,
     })
-    await db.reviews.add({
+    await recordLocalChange('problems', problem.id, 'upsert', updatedProblem)
+
+    const revId = (await db.reviews.add({
+      problemId: problem.id,
+      date: today,
+      result,
+    })) as number
+    await recordLocalChange('reviews', revId, 'upsert', {
+      id: revId,
       problemId: problem.id,
       date: today,
       result,
     })
+    await pushDailyStatus()
     setReviewed(s => new Set(s).add(problem.id!))
   }
 

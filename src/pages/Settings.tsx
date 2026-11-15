@@ -5,6 +5,8 @@ import type { Settings } from '../db/db'
 import { useAppStore } from '../store/useAppStore'
 import { requestNotificationPermission, sendNotification } from '../lib/nagMode'
 import { todayIST } from '../lib/dates'
+import { recalculatePlanWeeksFromNewStart } from '../lib/planShift'
+import { recordLocalChange, pushDailyStatus } from '../lib/syncEngine'
 import CloudSyncSection from '../components/CloudSyncSection'
 import PhoneRemindersSection from '../components/PhoneRemindersSection'
 
@@ -18,7 +20,31 @@ export default function Settings() {
 
   async function updateSetting<K extends keyof Settings>(key: K, value: Settings[K]) {
     if (!settings?.id) return
+    const updated = { ...settings, [key]: value }
     await db.settings.update(settings.id, { [key]: value })
+    await recordLocalChange('settings', settings.id, 'upsert', updated)
+    await pushDailyStatus()
+  }
+
+  async function handlePlanStartDateChange(newDate: string) {
+    if (!settings?.id || !newDate) return
+    const currentWeeks = await db.planWeeks.toArray()
+    const updatedWeeks = recalculatePlanWeeksFromNewStart(currentWeeks, newDate)
+
+    for (const week of updatedWeeks) {
+      await db.planWeeks.put(week)
+      await recordLocalChange('planWeeks', week.weekNumber, 'upsert', week)
+    }
+
+    const newResets = Math.max(0, (settings.startDateResetsRemaining ?? 3) - 1)
+    const updatedSettings: Settings = {
+      ...settings,
+      planStartDate: newDate,
+      startDateResetsRemaining: newResets,
+    }
+    await db.settings.put(updatedSettings)
+    await recordLocalChange('settings', settings.id, 'upsert', updatedSettings)
+    await pushDailyStatus()
   }
 
   async function requestPermission() {
@@ -38,7 +64,10 @@ export default function Settings() {
   }
 
   async function exportData() {
-    const [settingsData, problems, reviews, logs, concepts, stories, jobs, mocks, weeklyReviews, planWeeks, lldHld, checklists] = await Promise.all([
+    const [
+      settingsData, problems, reviews, logs, concepts, stories, jobs,
+      mocks, weeklyReviews, planWeeks, lldHld, checklists, neetcode, csTasks
+    ] = await Promise.all([
       db.settings.toArray(),
       db.problems.toArray(),
       db.reviews.toArray(),
@@ -51,12 +80,14 @@ export default function Settings() {
       db.planWeeks.toArray(),
       db.lldHldItems.toArray(),
       db.checklistItems.toArray(),
+      db.neetcodeProblems.toArray(),
+      db.csMicroTasks.toArray(),
     ])
     const data = {
       exportedAt: new Date().toISOString(),
-      version: 1,
+      version: 2,
       settings: settingsData, problems, reviews, logs, concepts, stories, jobs, mocks,
-      weeklyReviews, planWeeks, lldHld, checklists
+      weeklyReviews, planWeeks, lldHld, checklists, neetcodeProblems: neetcode, csMicroTasks: csTasks
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -64,7 +95,7 @@ export default function Settings() {
     a.href = url
     a.download = `tracker-backup-${today}.json`
     a.click()
-    if (settings?.id) await db.settings.update(settings.id, { lastBackupDate: today })
+    if (settings?.id) await updateSetting('lastBackupDate', today)
   }
 
   async function clearData() {
@@ -124,8 +155,8 @@ export default function Settings() {
             <input
               type="date"
               className="input"
-              value={settings?.planStartDate ?? '2026-11-11'}
-              onChange={e => updateSetting('planStartDate', e.target.value)}
+              value={settings?.planStartDate ?? '2026-11-16'}
+              onChange={e => handlePlanStartDateChange(e.target.value)}
             />
           </div>
 

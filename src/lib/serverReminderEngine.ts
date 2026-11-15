@@ -12,6 +12,7 @@ export interface ReminderSettings {
   next_day_plan_time?: string  // "21:30"
   accountability_tone?: 'hardcore' | 'coach' | 'roast' // default "hardcore"
   why_i_must_switch?: string   // personal North Star
+  plan_start_date?: string     // "YYYY-MM-DD" kickoff date
   nag_enabled: boolean
   nag_interval_minutes: number // 15-60
   quiet_start: string          // "23:30"
@@ -102,10 +103,11 @@ export function shouldSend(
     return []
   }
 
-  // 2. Check if currently snoozed
+  // 2. Check if currently snoozed & baseline check
   const isSnoozed = status?.snoozed_until ? new Date(now.iso) < new Date(status.snoozed_until) : false
   const isRestDay = status?.rest_day === true
   const isAllDone = status ? (status.done_for_today || status.must_do_done >= status.must_do_total) : false
+  const isBaseline = settings.plan_start_date ? now.dateStr < settings.plan_start_date : false
 
   // Helper to check 15-minute slot window [slot, slot + 15 min)
   const isSlotDue = (slotTime: string): boolean => {
@@ -218,7 +220,15 @@ export function shouldSend(
   // 5. Final slot (22:00)
   const finalKey = `fixed:${now.dateStr}:final`
   if (isSlotDue(settings.final_time) && !loggedSlotKeys.has(finalKey)) {
-    if (status && !isAllDone && !isRestDay && !isSnoozed) {
+    if (isBaseline) {
+      messages.push({
+        kind: 'final',
+        slot_key: finalKey,
+        text: `🌙 BASELINE DAY COMPLETE: Tomorrow kicks off Week 1, Day 1 of your hardcore prep. Rest up, protect your energy, and be ready to execute at 100%.`,
+        priority: 'default',
+        suggestSnooze: false,
+      })
+    } else if (status && !isAllDone && !isRestDay && !isSnoozed) {
       const remaining = status.must_do_total - status.must_do_done
       messages.push({
         kind: 'final',
@@ -276,7 +286,7 @@ export function shouldSend(
   const eveningMinutes = parseTimeToMinutes(settings.evening_time)
   const isAfterEvening = currentMinutes >= eveningMinutes
 
-  if (settings.nag_enabled && isAfterEvening && !isRestDay && !isSnoozed) {
+  if (settings.nag_enabled && isAfterEvening && !isRestDay && !isSnoozed && !isBaseline) {
     if (status && !isAllDone) {
       const recentNags = logs.filter(l => l.kind === 'nag' || l.kind === 'evening')
       let shouldNagNow = false

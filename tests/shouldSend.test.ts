@@ -237,4 +237,36 @@ describe('serverReminderEngine (shouldSend with Hardcore Mode & Tomorrow Plan)',
     expect(finalMsg).toBeDefined()
     expect(finalMsg?.text).toContain('STREAK AT RISK')
   })
+
+  it('suppresses nag mode and sends baseline kickoff message during Week 0 before plan_start_date', () => {
+    const baselineSettings: ReminderSettings = {
+      ...baseSettings,
+      plan_start_date: '2026-11-16', // Kickoff is tomorrow
+    }
+
+    const baselineNow = {
+      iso: '2026-11-15T20:30:00+05:30', // Sunday evening
+      dateStr: '2026-11-15',
+      hour: 20,
+      minute: 30,
+      dayOfWeek: 0,
+    }
+
+    // Nag mode should NOT fire on baseline day
+    const nagMessages = shouldSend(baselineNow, baselineSettings, unfinishedStatus, [])
+    expect(nagMessages.filter(m => m.kind === 'nag').length).toBe(0)
+
+    // Final call at 22:00 should not threaten streak loss
+    const lateNow = {
+      ...baselineNow,
+      iso: '2026-11-15T22:05:00+05:30',
+      hour: 22,
+      minute: 5,
+    }
+    const lateMessages = shouldSend(lateNow, baselineSettings, unfinishedStatus, [])
+    const finalMsg = lateMessages.find(m => m.kind === 'final')
+    expect(finalMsg).toBeDefined()
+    expect(finalMsg?.text).toContain('BASELINE DAY COMPLETE')
+    expect(finalMsg?.text).not.toContain('STREAK AT RISK')
+  })
 })
