@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
-import db from '../db/db'
+import db, { NeetCodeProblem, CsMicroTask } from '../db/db'
 import { todayIST, formatDateLong, addDays, isWeekend, formatDateShort, nowIST } from '../lib/dates'
 import { calculateStreak } from '../lib/streak'
 import ProgressRing from '../components/ProgressRing'
@@ -15,26 +15,39 @@ import NeetCodeRevisionQueue from '../components/NeetCodeRevisionQueue'
 import { useSync } from '../store/useSyncStore'
 import { recordLocalChange, pushDailyStatus } from '../lib/syncEngine'
 
+// Baseline / Environment setup items (for Week 0 before official start)
+const BASELINE_ITEMS = [
+  { id: 'base-env', label: 'Setup IDE, LeetCode & notes workspace', icon: '⚙️', mins: 20 },
+  { id: 'base-medium', label: 'Solve 2-3 baseline medium problems (calibrate timing)', icon: '⏱️', mins: 60 },
+  { id: 'base-curriculum', label: 'Review CS & NeetCode 150 8-week syllabus', icon: '📖', mins: 20 },
+  { id: 'base-companies', label: 'Shortlist 60 dream Tier-A/B companies (zero applications)', icon: '🏢', mins: 30 },
+  { id: 'base-telegram', label: 'Verify Telegram bot & test notification connection', icon: '📱', mins: 5 },
+]
+
 // Weekday must-do items
 const WEEKDAY_ITEMS = [
-  { id: 'dsa-new', label: 'DSA: 1 new problem', icon: '💡', mins: 45 },
+  { id: 'dsa-new', label: 'DSA: Daily NeetCode problems', icon: '💡', mins: 45 },
   { id: 'dsa-revision', label: 'DSA: 1 revision problem', icon: '🔄', mins: 20 },
-  { id: 'topic-study', label: 'Topic of the week (deep study)', icon: '📚', mins: 60 },
+  { id: 'topic-study', label: 'Topic of the week (CS micro-learning)', icon: '📚', mins: 45 },
   { id: 'story-practice', label: 'Story / project answer practice', icon: '🎭', mins: 15 },
 ]
 
-// Weekend must-do items
+// Weekend must-do items (High-leverage sprint)
 const WEEKEND_ITEMS = [
   { id: 'mock-90', label: '90-min timed mock (2 DSA problems)', icon: '⏱️', mins: 90 },
   { id: 'design-exercise', label: 'System design or LLD exercise', icon: '🏗️', mins: 60 },
+  { id: 'dsa-revision', label: 'DSA: Spaced revision problem', icon: '🔄', mins: 20 },
 ]
 
-function getChecklistItems(isWeekendDay: boolean, weekendLightMode: boolean) {
+function getChecklistItems(isWeekendDay: boolean, weekendLightMode: boolean, isBaselineDay: boolean = false) {
+  if (isBaselineDay) {
+    return BASELINE_ITEMS
+  }
   if (isWeekendDay) {
     if (weekendLightMode) {
-      return WEEKEND_ITEMS
+      return WEEKEND_ITEMS.slice(0, 2)
     }
-    return [...WEEKEND_ITEMS, ...WEEKDAY_ITEMS]
+    return WEEKEND_ITEMS
   }
   return WEEKDAY_ITEMS
 }
@@ -60,8 +73,16 @@ export default function Today() {
   const [editingWhy, setEditingWhy] = useState(false)
   const [whyInput, setWhyInput] = useState('')
 
+  // Day label & baseline calculation
+  const daysSinceStart = planWeeks && settings
+    ? Math.floor((new Date(today + 'T00:00:00+05:30').getTime() - new Date(settings.planStartDate + 'T00:00:00+05:30').getTime()) / 86400000)
+    : 0
+  const isBaselineDay = daysSinceStart < 0
+  const weekNum = isBaselineDay ? 0 : Math.floor(daysSinceStart / 7) + 1
+  const dayNum = isBaselineDay ? 0 : (daysSinceStart % 7) + 1
+
   const weekendLightMode = settings?.weekendLightMode ?? false
-  const checklistItems = getChecklistItems(isWeekendDay, weekendLightMode)
+  const checklistItems = getChecklistItems(isWeekendDay, weekendLightMode, isBaselineDay)
 
   // Current plan week & Tomorrow's plan week
   const currentWeek = planWeeks?.find(w => today >= w.startDate && today <= w.endDate)
@@ -77,10 +98,10 @@ export default function Today() {
 
   const { status: syncStatus, triggerSync } = useSync()
 
-  // Time check for danger zone
+  // Time check for danger zone: ONLY active if plan has officially started AND there is an existing streak to lose
   const currentHour = nowIST().hour
   const isDangerTime = currentHour >= 19
-  const isStreakInDanger = isDangerTime && !allMustDoDone && !todayLog?.doneForToday && todayLog?.missReason !== 'rest day'
+  const isStreakInDanger = !isBaselineDay && streak > 0 && isDangerTime && !allMustDoDone && !todayLog?.doneForToday && todayLog?.missReason !== 'rest day'
 
   async function toggleItem(id: string) {
     const existing = await db.dailyLogs.get(today)
@@ -110,25 +131,19 @@ export default function Today() {
     setEditingWhy(false)
   }
 
-  // Day label
-  const daysSinceStart = planWeeks && settings
-    ? Math.floor((new Date(today + 'T00:00:00+05:30').getTime() - new Date(settings.planStartDate + 'T00:00:00+05:30').getTime()) / 86400000)
-    : 0
-  const weekNum = Math.floor(daysSinceStart / 7) + 1
-  const dayNum = (daysSinceStart % 7) + 1
-
   const effectiveWeekNum = weekNum >= 1 && weekNum <= 8 ? weekNum : 1
   const effectiveDayNum = dayNum >= 1 && dayNum <= 7 ? dayNum : 1
 
-  const todayNeetCode = useLiveQuery(() =>
-    db.neetcodeProblems.where('weekNumber').equals(effectiveWeekNum).and(p => p.dayNumber === effectiveDayNum).toArray(),
-    [effectiveWeekNum, effectiveDayNum]
-  )
+  const todayNeetCode = useLiveQuery<NeetCodeProblem[]>(async () => {
+    if (isBaselineDay) return []
+    return db.neetcodeProblems.where('weekNumber').equals(effectiveWeekNum).and(p => p.dayNumber === effectiveDayNum).toArray()
+  }, [isBaselineDay, effectiveWeekNum, effectiveDayNum])
 
-  const todayCsTask = useLiveQuery(() =>
-    db.csMicroTasks.where('weekNumber').equals(effectiveWeekNum).and(t => t.dayNumber === effectiveDayNum).first(),
-    [effectiveWeekNum, effectiveDayNum]
-  )
+  const todayCsTask = useLiveQuery<CsMicroTask | null>(async () => {
+    if (isBaselineDay) return null
+    const res = await db.csMicroTasks.where('weekNumber').equals(effectiveWeekNum).and(t => t.dayNumber === effectiveDayNum).first()
+    return res ?? null
+  }, [isBaselineDay, effectiveWeekNum, effectiveDayNum])
 
   const dueNeetCodeRevisions = useLiveQuery(() =>
     db.neetcodeProblems.where('nextReviewAt').belowOrEqual(today).and(p => p.status !== 'unsolved').toArray(),
@@ -137,8 +152,8 @@ export default function Today() {
 
   // Tomorrow targets
   const tomorrowDaysSinceStart = daysSinceStart + 1
-  const tomorrowWeekNum = Math.floor(tomorrowDaysSinceStart / 7) + 1
-  const tomorrowDayNum = (tomorrowDaysSinceStart % 7) + 1
+  const tomorrowWeekNum = tomorrowDaysSinceStart < 0 ? 0 : Math.floor(tomorrowDaysSinceStart / 7) + 1
+  const tomorrowDayNum = tomorrowDaysSinceStart < 0 ? 0 : (tomorrowDaysSinceStart % 7) + 1
   const effectiveTomWeek = tomorrowWeekNum >= 1 && tomorrowWeekNum <= 8 ? tomorrowWeekNum : 1
   const effectiveTomDay = tomorrowDayNum >= 1 && tomorrowDayNum <= 7 ? tomorrowDayNum : 1
 
@@ -223,20 +238,20 @@ export default function Today() {
             </button>
           </div>
           <h1 className="text-2xl font-bold text-gray-100 dark:text-gray-100 leading-tight">
-            {currentWeek
-              ? `Week ${weekNum}, Day ${dayNum}`
-              : daysSinceStart < 0
-                ? 'Countdown to Nov 11'
+            {isBaselineDay
+              ? 'Week 0 · Baseline Setup'
+              : currentWeek
+                ? `Week ${weekNum}, Day ${dayNum}`
                 : `Day ${daysSinceStart + 1}`
             }
           </h1>
-          {currentWeek ? (
+          {isBaselineDay ? (
+            <p className="text-xs text-amber-400 mt-0.5 font-medium">
+              Starts {formatDateShort(settings?.planStartDate || '2026-11-16')} · Environment setup & baseline calibration
+            </p>
+          ) : currentWeek ? (
             <p className="text-sm text-brand-400 mt-0.5 font-medium">
               {currentWeek.focusTopic}
-            </p>
-          ) : daysSinceStart < 0 ? (
-            <p className="text-xs text-amber-400 mt-0.5 font-medium">
-              Starts on Nov 11 · Complete your environment setup & baseline problems
             </p>
           ) : null}
         </div>
@@ -317,6 +332,23 @@ export default function Today() {
       {/* Carry-over from yesterday */}
       {missedYesterday.length > 0 && (
         <CarryOver items={missedYesterday} />
+      )}
+
+      {/* Kickoff Countdown Banner during Week 0 / Baseline */}
+      {isBaselineDay && (
+        <div className="card p-3 mb-4 bg-gradient-to-r from-brand-950/40 via-surface-200/50 to-indigo-950/40 border border-brand-500/30">
+          <div className="flex items-start gap-2.5">
+            <span className="text-xl">🚀</span>
+            <div>
+              <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">
+                Kickoff Countdown · Starts Tomorrow ({formatDateShort(settings?.planStartDate || '2026-11-16')})
+              </p>
+              <p className="text-[11px] text-gray-300 mt-0.5 leading-relaxed">
+                Today is <b>Week 0 (Baseline Setup)</b>. Calibrate your setup, review the 60 target companies list, and get a solid night of rest. Week 1 daily targets officially unlock tomorrow morning!
+              </p>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* NeetCode 150 Daily Targets */}

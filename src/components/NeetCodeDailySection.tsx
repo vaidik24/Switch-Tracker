@@ -88,9 +88,14 @@ export default function NeetCodeDailySection({
       </div>
 
       {problems.length === 0 ? (
-        <p className="text-xs text-gray-400 italic py-2">
-          No prescribed NeetCode problems scheduled for today. Check the Plan tab or tackle weak pattern reviews!
-        </p>
+        <div className="py-2">
+          <p className="text-xs text-brand-300 font-semibold mb-1">
+            🚀 Week 1 officially kicks off tomorrow!
+          </p>
+          <p className="text-[11px] text-gray-400">
+            Daily prescribed NeetCode 150 problems unlock tomorrow morning at 08:00 IST. Complete your baseline setup today and preview tomorrow's battle plan below!
+          </p>
+        </div>
       ) : (
         <div className="space-y-2">
           {problems.map(problem => {
