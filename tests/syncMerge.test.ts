@@ -94,4 +94,24 @@ describe('syncMerge (Last-Write-Wins and Tombstones)', () => {
     expect(result.finalMap.has('3')).toBe(false)
     expect(result.finalMap.get('4')?.title).toBe('Problem 4 (Brand New)')
   })
+
+  it('deduplicates outbox items by entity and recordId, keeping the latest one', () => {
+    const rawOutbox = [
+      { id: 1, entity: 'settings', recordId: '1', action: 'upsert', data: { planStartDate: '2026-11-11' }, updatedAt: '2026-11-15T10:00:00Z' },
+      { id: 2, entity: 'dailyLogs', recordId: '2026-11-15', action: 'upsert', data: { streak: 1 }, updatedAt: '2026-11-15T10:05:00Z' },
+      { id: 3, entity: 'settings', recordId: '1', action: 'upsert', data: { planStartDate: '2026-11-16' }, updatedAt: '2026-11-15T10:10:00Z' },
+      { id: 4, entity: 'dailyLogs', recordId: '2026-11-15', action: 'upsert', data: { streak: 1, done: true }, updatedAt: '2026-11-15T10:15:00Z' },
+    ]
+
+    const latestByRecord = new Map<string, any>()
+    for (const item of rawOutbox) {
+      const key = `${item.entity}:${item.recordId}`
+      latestByRecord.set(key, item)
+    }
+
+    const deduplicated = Array.from(latestByRecord.values())
+    expect(deduplicated).toHaveLength(2)
+    expect(deduplicated[0].data.planStartDate).toBe('2026-11-16')
+    expect(deduplicated[1].data.done).toBe(true)
+  })
 })

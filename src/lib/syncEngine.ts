@@ -198,7 +198,17 @@ export async function syncNow(): Promise<SyncSummary> {
     // 1. PUSH OUTBOX
     const pending = await db.outbox.toArray()
     if (pending.length > 0) {
-      const recordsToPush = pending.map(p => ({
+      // Deduplicate pending outbox items by `${entity}:${recordId}`, keeping the latest change.
+      // This prevents PostgreSQL error: "ON CONFLICT DO UPDATE command cannot affect row a second time"
+      const latestByRecord = new Map<string, OutboxItem>()
+      for (const item of pending) {
+        const key = `${item.entity}:${item.recordId}`
+        latestByRecord.set(key, item)
+      }
+
+      const deduplicated = Array.from(latestByRecord.values())
+
+      const recordsToPush = deduplicated.map(p => ({
         user_id: user.id,
         entity: p.entity,
         id: String(p.recordId),
@@ -217,7 +227,7 @@ export async function syncNow(): Promise<SyncSummary> {
         summary.uploaded += chunk.length
       }
 
-      // Remove successfully pushed items from outbox
+      // Remove all processed items from outbox (including superseded duplicates)
       const idsToDelete = pending.map(p => p.id!).filter(Boolean)
       await db.outbox.bulkDelete(idsToDelete)
     }
