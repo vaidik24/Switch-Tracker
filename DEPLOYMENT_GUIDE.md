@@ -1,5 +1,5 @@
 # Complete Zero-to-Production Deployment Guide
-### Personal Job Switch Tracker (Vaidik's 2-Month Prep Plan)
+### Personal Job Switch Tracker (Your name's 2-Month Prep Plan)
 
 This guide walks you through deploying your web app, Supabase database, Edge Functions, Gemini AI, and Telegram Bot from scratch.
 
@@ -33,8 +33,8 @@ This guide walks you through deploying your web app, Supabase database, Edge Fun
 
 1. Open Telegram and search for **[@BotFather](https://t.me/BotFather)**.
 2. Send `/newbot`.
-3. Enter a display name: `Vaidik Job Switch Tracker`.
-4. Enter a username ending in `bot` (e.g. `VaidikPrepTracker_bot` or `VaidikSwitch_bot`).
+3. Enter a display name: `Your name Job Switch Tracker`.
+4. Enter a username ending in `bot` (e.g. `Your namePrepTracker_bot` or `Your nameSwitch_bot`).
 5. BotFather will reply with your **HTTP API Token**:
    ```
    123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
@@ -73,7 +73,7 @@ This guide walks you through deploying your web app, Supabase database, Edge Fun
 Open your terminal on your Mac:
 
 ```bash
-cd /Users/vaidikpandya/Desktop/vaidik-mac/Tracker
+cd /Users/Your namepandya/Desktop/Your name-mac/Tracker
 
 # 1. Login to Supabase CLI (opens browser to authenticate)
 npx supabase login
@@ -111,7 +111,7 @@ npx supabase secrets set \
   CRON_SECRET="${CRON_SECRET}" \
   GEMINI_API_KEY="<your-gemini-api-key-from-step-2>" \
   GEMINI_MODEL="gemini-2.0-flash" \
-  APP_URL="https://tracker.vaidik.dev"
+  APP_URL="https://tracker.Your name.dev"
 ```
 
 Now deploy the two Edge Functions:
@@ -170,7 +170,7 @@ SELECT * FROM cron.job WHERE jobname = 'invoke-reminder-cron-every-15m';
 
 ### A. Push Code to GitHub
 ```bash
-cd /Users/vaidikpandya/Desktop/vaidik-mac/Tracker
+cd /Users/Your namepandya/Desktop/Your name-mac/Tracker
 
 # Create a new repository on github.com (e.g. named "job-switch-tracker", set to Private)
 # Then link and push:

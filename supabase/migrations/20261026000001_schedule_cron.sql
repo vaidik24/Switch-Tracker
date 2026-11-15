@@ -12,9 +12,12 @@ DECLARE
     v_secret TEXT;
     v_body TEXT;
 BEGIN
-    -- Unschedule existing job if present
-    PERFORM cron.unschedule('invoke-reminder-cron-every-15m');
-    EXCEPTION WHEN OTHERS THEN NULL;
+    -- Unschedule existing job if present (safely inside a sub-block)
+    BEGIN
+        PERFORM cron.unschedule('invoke-reminder-cron-every-15m');
+    EXCEPTION WHEN OTHERS THEN
+        NULL;
+    END;
 
     -- Retrieve project_url from Vault or parameter
     IF p_project_url IS NOT NULL THEN
