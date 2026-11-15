@@ -300,13 +300,22 @@ serve(async (req: Request) => {
       const tomorrowDateStr = tomorrowObj.toLocaleDateString("en-CA", { timeZone: settings.timezone })
       const tomorrowWeekday = tomorrowObj.toLocaleDateString("en-US", { timeZone: settings.timezone, weekday: "short" })
 
-      // Check synced plan weeks
-      const { data: planWeekRecords } = await supabase
-        .from("sync_records")
-        .select("data")
-        .eq("user_id", userId)
-        .eq("entity", "planWeeks")
-        .eq("deleted", false)
+      // Check synced plan weeks and settings
+      const [{ data: planWeekRecords }, { data: syncedSettingsRecord }] = await Promise.all([
+        supabase
+          .from("sync_records")
+          .select("data")
+          .eq("user_id", userId)
+          .eq("entity", "planWeeks")
+          .eq("deleted", false),
+        supabase
+          .from("sync_records")
+          .select("data")
+          .eq("user_id", userId)
+          .eq("entity", "settings")
+          .eq("deleted", false)
+          .maybeSingle(),
+      ])
 
       let matchingWeek: any = null
       if (planWeekRecords && planWeekRecords.length > 0) {
@@ -351,7 +360,7 @@ serve(async (req: Request) => {
         const dStart = new Date(planStartDate + "T00:00:00+05:30").getTime()
         const dTarget = new Date(targetDateStr + "T00:00:00+05:30").getTime()
         const diffDays = Math.floor((dTarget - dStart) / 86400000)
-        if (diffDays < 0) return { weekNumber: 1, dayNumber: 1 }
+        if (diffDays < 0) return { weekNumber: 0, dayNumber: 0 }
         const weekNumber = Math.min(Math.floor(diffDays / 7) + 1, 8)
         const dayNumber = (diffDays % 7) + 1
         return { weekNumber, dayNumber }
@@ -363,10 +372,12 @@ serve(async (req: Request) => {
         // Use Gemini API dynamically for Nightly Tomorrow Plan
         if (msg.kind === 'next_day_plan' && tomorrowPlanSummary) {
           try {
-            const planStartDate = settings.plan_start_date || "2026-11-11"
+            const planStartDate = syncedSettingsRecord?.data?.planStartDate || settings.plan_start_date || "2026-11-16"
             const { weekNumber: tomWeek, dayNumber: tomDay } = getWeekAndDay(planStartDate, tomorrowPlanSummary.dateStr)
-            const tomorrowNeetCode = NEETCODE_150.filter(p => p.weekNumber === tomWeek && p.dayNumber === tomDay)
-            const tomorrowCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === tomWeek && t.dayNumber === tomDay)
+            const targetWeek = tomWeek || 1
+            const targetDay = tomDay || 1
+            const tomorrowNeetCode = NEETCODE_150.filter(p => p.weekNumber === targetWeek && p.dayNumber === targetDay)
+            const tomorrowCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === targetWeek && t.dayNumber === targetDay)
 
             const aiPlan = await generateAITomorrowPlan({
               todayDate: now.dateStr,

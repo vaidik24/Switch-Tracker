@@ -358,31 +358,71 @@ serve(async (req: Request) => {
 
     const userId = channel.user_id
 
-    // Fetch daily status & settings
-    const [{ data: dailyStatus }, { data: userSettings }] = await Promise.all([
+    // Fetch daily status, reminder settings, synced settings, and plan weeks
+    const [
+      { data: dailyStatus },
+      { data: userSettings },
+      { data: syncedSettingsRecord },
+      { data: planWeekRecords },
+    ] = await Promise.all([
       supabase.from("daily_status").select("*").eq("user_id", userId).eq("date", todayStr).single(),
       supabase.from("reminder_settings").select("*").eq("user_id", userId).single(),
+      supabase.from("sync_records").select("data").eq("user_id", userId).eq("entity", "settings").eq("deleted", false).maybeSingle(),
+      supabase.from("sync_records").select("data").eq("user_id", userId).eq("entity", "planWeeks").eq("deleted", false),
     ])
 
-    const why = userSettings?.why_i_must_switch || "To escape career stagnation and land a high-impact Tier-1 role"
+    const why = syncedSettingsRecord?.data?.whyIMustSwitch || userSettings?.why_i_must_switch || "To escape career stagnation and land a high-impact Tier-1 role"
+    const planStartDate = syncedSettingsRecord?.data?.planStartDate || userSettings?.plan_start_date || "2026-11-16"
 
-    function getWeekAndDay(planStartDate: string, targetDateStr: string): { weekNumber: number; dayNumber: number } {
-      const dStart = new Date(planStartDate + "T00:00:00+05:30").getTime()
+    function getWeekAndDay(startDate: string, targetDateStr: string): { weekNumber: number; dayNumber: number } {
+      const dStart = new Date(startDate + "T00:00:00+05:30").getTime()
       const dTarget = new Date(targetDateStr + "T00:00:00+05:30").getTime()
       const diffDays = Math.floor((dTarget - dStart) / 86400000)
-      if (diffDays < 0) return { weekNumber: 1, dayNumber: 1 }
+      if (diffDays < 0) return { weekNumber: 0, dayNumber: 0 }
       const weekNumber = Math.min(Math.floor(diffDays / 7) + 1, 8)
       const dayNumber = (diffDays % 7) + 1
       return { weekNumber, dayNumber }
     }
 
-    const planStartDate = userSettings?.plan_start_date || "2026-11-11"
     const { weekNumber, dayNumber } = getWeekAndDay(planStartDate, todayStr)
-    const todayNeetCode = NEETCODE_150.filter(p => p.weekNumber === weekNumber && p.dayNumber === dayNumber)
-    const todayCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === weekNumber && t.dayNumber === dayNumber)
+    const isBaseline = weekNumber === 0
 
     if (command === "/today" || command === "/status") {
       await sendChatAction(chatId, "typing")
+
+      if (isBaseline) {
+        const tomorrowObj = new Date()
+        tomorrowObj.setDate(tomorrowObj.getDate() + 1)
+        const tomorrowStr = tomorrowObj.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
+        const isTomorrowStart = tomorrowStr === planStartDate
+
+        const day1NeetCode = NEETCODE_150.filter(p => p.weekNumber === 1 && p.dayNumber === 1)
+        const day1CsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === 1 && t.dayNumber === 1)
+
+        const reply = `<b>📅 AAJ KA STATUS: Baseline Setup (Week 0)</b>\n\n` +
+          `<b>North Star:</b> <i>"${why}"</i>\n\n` +
+          (isTomorrowStart
+            ? `🚀 <b>Kal (${planStartDate}) se tera 2-month hardcore switch plan officially shuru ho raha hai!</b>\n\n`
+            : `⏳ Plan start date: <b>${planStartDate}</b>\n\n`) +
+          `🎯 <b>Aaj ka Baseline Goal:</b>\n` +
+          `• Environment setup complete kar (IDE, LeetCode, Notes)\n` +
+          `• 3 baseline medium problems timed solve kar\n` +
+          `• Spaced repetition revision flow samajh le\n` +
+          `• Target 60 companies ki list bana (Zero applications right now!)\n\n` +
+          `💻 <b>Kal (Week 1, Day 1) ke first NeetCode 150 targets ready hain:</b>\n` +
+          day1NeetCode.map(p => `• <a href="${p.url}">${p.title}</a> (<b>${p.difficulty}</b>, ⏱️ ${p.estMinutes}m)`).join("\n") +
+          (day1CsTopic ? `\n\n🧠 <b>Kal ka CS Topic:</b>\n• <b>${day1CsTopic.title}</b> (⏱️ ${day1CsTopic.estMinutes}m)\n  <i>${day1CsTopic.deliverable}</i>` : "") +
+          `\n\n<i>Type /tomorrow to preview kal ka complete battle plan from Gemini!</i>`
+
+        await sendTelegramMessage(chatId, reply, {
+          inline_keyboard: [[{ text: "📱 Open App", url: APP_URL }]],
+        })
+        return jsonResponse({ ok: true })
+      }
+
+      const todayNeetCode = NEETCODE_150.filter(p => p.weekNumber === weekNumber && p.dayNumber === dayNumber)
+      const todayCsTopic = CS_MICRO_CURRICULUM.find(t => t.weekNumber === weekNumber && t.dayNumber === dayNumber)
+
       const remaining = dailyStatus ? dailyStatus.must_do_total - dailyStatus.must_do_done : 4
       const remainingTasks = dailyStatus?.remaining_titles || []
 
